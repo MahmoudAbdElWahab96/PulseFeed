@@ -1,0 +1,99 @@
+name: pulsefeed
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    environment: &laravel-env
+      APP_ENV: "${APP_ENV:-local}"
+      APP_DEBUG: "${APP_DEBUG:-true}"
+      APP_KEY: "${APP_KEY}"
+      RUN_MIGRATIONS: "1"
+      REBUILD_AUTOLOADER: "${REBUILD_AUTOLOADER:-1}"
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_DATABASE: pulsefeed
+      DB_USERNAME: root
+      DB_PASSWORD: secret
+      REDIS_CLIENT: phpredis
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CACHE_STORE: redis
+      CACHE_PREFIX: pulsefeed
+      QUEUE_CONNECTION: redis
+    volumes:
+      # Live source for development; the named vendor volume keeps the
+      # Linux-built production dependencies baked into the image.
+      - .:/var/www
+      - vendor:/var/www/vendor
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  queue:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: php artisan queue:work redis --tries=3 --backoff=5,10,30 --max-time=3600
+    environment: *laravel-env
+    volumes:
+      - .:/var/www
+      - vendor:/var/www/vendor
+    depends_on:
+      app:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.29-alpine
+    ports:
+      - "${APP_PORT:-8080}:80"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./public:/var/www/public:ro
+    depends_on:
+      app:
+        condition: service_started
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: pulsefeed
+      MYSQL_ROOT_PASSWORD: secret
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot", "-psecret"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "${FORWARD_DB_PORT:-33061}:3306"
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "${FORWARD_REDIS_PORT:-6381}:6379"
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  redis-data:
+  vendor:

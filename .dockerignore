@@ -1,0 +1,16 @@
+vendor
+node_modules
+.git
+.github
+.env
+.env.backup
+.phpunit.cache
+storage/logs/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+tests
+docker/mysql-data
+docker/redis-data
+*.sqlite
+.DS_Store
