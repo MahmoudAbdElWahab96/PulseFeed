@@ -25,12 +25,20 @@ class FollowService
 
         User::query()->findOrFail($targetId);
 
-        return (bool) Follow::query()->insertOrIgnore([
+        $created = (bool) Follow::query()->insertOrIgnore([
             'follower_id' => $follower->id,
             'followee_id' => $targetId,
             'created_at' => now(),
             'updated_at' => now(),
         ]);
+
+        if ($created) {
+            // The follower's feed graph changed; all their cached feed
+            // pages are invalidated with one version bump.
+            FeedService::invalidateForUser($follower->id);
+        }
+
+        return $created;
     }
 
     /**
@@ -49,9 +57,15 @@ class FollowService
 
         User::query()->findOrFail($targetId);
 
-        return (bool) Follow::query()
+        $removed = (bool) Follow::query()
             ->where('follower_id', $follower->id)
             ->where('followee_id', $targetId)
             ->delete();
+
+        if ($removed) {
+            FeedService::invalidateForUser($follower->id);
+        }
+
+        return $removed;
     }
 }

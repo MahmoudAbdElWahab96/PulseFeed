@@ -18,9 +18,11 @@ class PostFactory extends Factory
      */
     public function definition(): array
     {
+        // Words, not realText(): Faker's Text provider accumulates large
+        // internal buffers and exhausts memory across a full test suite.
         return [
             'user_id' => User::factory(),
-            'content' => substr(fake()->realText(rand(120, 900)), 0, 1000),
+            'content' => str(fake()->words(rand(8, 40), true))->title()->toString(),
         ];
     }
 }

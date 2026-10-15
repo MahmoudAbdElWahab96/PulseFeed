@@ -12,9 +12,9 @@ use Illuminate\Http\Resources\Json\JsonResource;
 class PostResource extends JsonResource
 {
     /**
-     * likes_count and liked_by_me are intentionally absent until the likes
-     * phase; they will be added here via withLikes() without changing the
-     * surrounding contract.
+     * likes_count and liked_by_me are attached to the models by
+     * LikeService::hydrate() in batched queries before the resource is
+     * built; they are never fetched per post.
      *
      * @return array<string, mixed>
      */
@@ -24,6 +24,8 @@ class PostResource extends JsonResource
             'id' => $this->id,
             'content' => $this->content,
             'author' => new UserResource($this->whenLoaded('author')),
+            'likes_count' => (int) $this->likes_count,
+            'liked_by_me' => (bool) $this->liked_by_me,
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

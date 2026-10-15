@@ -4,6 +4,7 @@ use App\Models\Post;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
@@ -205,6 +206,10 @@ it('issues a fixed number of queries regardless of page contents (no N+1)', func
     }
 
     $countQueries = function () use ($subscriber) {
+        // Both measurements must take the uncached query path: feed pages
+        // and like counts are cached per user, so flush between runs.
+        Cache::flush();
+
         DB::flushQueryLog();
         DB::enableQueryLog();
 
@@ -217,8 +222,8 @@ it('issues a fixed number of queries regardless of page contents (no N+1)', func
 
     $withFiveAuthors = $countQueries();
 
-    // Twenty more posts from twenty new authors; if author resolution were
-    // per-post, the query count would grow with the page.
+    // Twenty more posts from twenty new authors; if author resolution or
+    // like metadata were per-post, the query count would grow with the page.
     $moreAuthors = User::factory()->count(20)->create();
     $subscriber->following()->attach($moreAuthors);
     foreach ($moreAuthors as $author) {
@@ -227,6 +232,7 @@ it('issues a fixed number of queries regardless of page contents (no N+1)', func
 
     $withTwentyFiveAuthors = $countQueries();
 
-    expect($withFiveAuthors)->toBeLessThanOrEqual(3)
+    // Budget: feed join, eager authors, grouped like counts, liked_by_me.
+    expect($withFiveAuthors)->toBeLessThanOrEqual(4)
         ->and($withTwentyFiveAuthors)->toBe($withFiveAuthors);
 });
