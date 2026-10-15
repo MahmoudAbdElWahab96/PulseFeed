@@ -7,6 +7,7 @@ use App\Http\Requests\StorePostRequest;
 use App\Http\Resources\PostResource;
 use App\Models\Post;
 use App\Services\LikeService;
+use App\Services\PostService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -14,15 +15,17 @@ use Illuminate\Support\Collection;
 
 class PostController extends Controller
 {
-    public function __construct(private readonly LikeService $likes) {}
+    public function __construct(
+        private readonly PostService $posts,
+        private readonly LikeService $likes,
+    ) {}
 
     public function store(StorePostRequest $request): JsonResponse
     {
         // The authenticated user is always the author; a client-supplied
-        // user_id is never read. Single insert, no transaction needed.
-        $post = $request->user()->posts()->create(
-            $request->safe()->only(['content'])
-        );
+        // user_id is never read. The service persists the post and queues
+        // the notification fan-out for after the commit.
+        $post = $this->posts->create($request->user(), (string) $request->validated('content'));
 
         $post->load('author');
 
