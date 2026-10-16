@@ -7,8 +7,9 @@ Laravel with MySQL and Redis.
 
 > Assignment submission for Augustus Media — Senior Backend Developer.
 > Every measured number in this document lists the environment it was measured in.
-> Docker Compose files are included but were **not** executed locally (no Docker on
-> the build machine); see [Docker](#docker) for details.
+> The Docker Compose stack was built and executed on the development machine
+> (Docker Engine 29.5.2) after the initial native development; see [Docker](#docker)
+> for exactly what was and was not verified inside containers.
 
 ## Implemented features
 
@@ -78,10 +79,23 @@ runs `migrate --force` via entrypoint before serving), `queue` (`queue:work redi
 `mysql:8.4`, and `redis:8` — with volumes, health checks, and Laravel configuration
 injected through environment variables that override `.env`.
 
-**Not verified locally:** the build machine has no Docker installed. The Compose
-stack was authored and structurally validated (YAML parsed, anchors resolved,
-service/environment consistency reviewed) but never built or started. Treat it as
-reviewer-verifiable, not pre-verified:
+**Verified on the development machine** (Docker Engine 29.5.2, macOS host) after the
+native development was complete:
+
+- `docker compose up -d --build` brought up all five services; `mysql` and `redis`
+  reported healthy per their health checks.
+- The full request path through nginx + php-fpm worked: `/up` health check 200,
+  registration, login, follow (201), post creation (201) with the complete resource
+  shape (`likes_count`, `liked_by_me`), and like (201 with count).
+- The `queue` container executed the real fan-out end to end: `FanOutPostNotifications`
+  → `NotifyFollowerChunk` in `docker compose logs queue`, and the notification row
+  appeared in the containerized MySQL for the follower (not the author).
+- Each container runs its own MySQL/Redis data (dev bind-mounted source, prod-baked
+  vendor volume), so the Docker environment is independent of the native one.
+
+What this does **not** prove: production deployment hardening (resource limits,
+secrets management, image scanning, restart-under-load) — this was a single-host
+functional verification.
 
 ```bash
 docker compose up -d --build
@@ -313,7 +327,9 @@ Four levels of verification were used, and they are not interchangeable:
    feed page keys (`feed:{id}:v{n}:20:first`, TTL 30), MGET batching, invalidation
    on unlike, and an actual `queue:work redis` run processing walker + chunk to
    produce notification rows.
-4. **Docker — NOT verified.** Authored, structurally validated, never executed.
+4. **Docker Compose** — built and run on the development machine (Docker Engine
+   29.5.2): full request path through nginx + php-fpm, plus the queue worker
+   processing the fan-out inside containers. Not a production-hardening test.
 
 ## Architecture decisions and tradeoffs
 
