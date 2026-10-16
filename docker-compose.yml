@@ -25,9 +25,13 @@ services:
       QUEUE_CONNECTION: redis
     volumes:
       # Live source for development; the named vendor volume keeps the
-      # Linux-built production dependencies baked into the image.
+      # Linux-built production dependencies baked into the image. The
+      # anonymous bootstrap/cache volume stops containers from fighting
+      # the host over the shared package manifest (host and container
+      # discover different vendor sets).
       - .:/var/www
       - vendor:/var/www/vendor
+      - /var/www/bootstrap/cache
     depends_on:
       mysql:
         condition: service_healthy
@@ -44,6 +48,7 @@ services:
     volumes:
       - .:/var/www
       - vendor:/var/www/vendor
+      - /var/www/bootstrap/cache
     depends_on:
       app:
         condition: service_started
