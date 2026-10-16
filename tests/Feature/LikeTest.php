@@ -50,7 +50,6 @@ it('unlikes idempotently and never goes negative', function () {
         ->assertJsonPath('data.likes_count', 0)
         ->assertJsonPath('data.liked_by_me', false);
 
-    // Unliking again must not error or produce a negative count.
     $this->actingAs($user, 'sanctum')
         ->deleteJson("/api/posts/{$post->id}/like")
         ->assertOk()
@@ -112,7 +111,6 @@ it('exposes correct likes_count and liked_by_me on post detail per user', functi
         ->assertJsonPath('data.likes_count', 2)
         ->assertJsonPath('data.liked_by_me', true);
 
-    // A third user sees the same count but not their own like.
     $carol = User::factory()->create();
     $this->actingAs($carol, 'sanctum')
         ->getJson("/api/posts/{$post->id}")
@@ -155,14 +153,12 @@ it('caches like counts and invalidates on real state changes only', function () 
     $post = Post::factory()->for($author, 'author')->create();
     $key = LikeService::countCacheKey($post->id);
 
-    // Miss: first read computes and caches.
     expect(Cache::has($key))->toBeFalse();
     $this->actingAs($author, 'sanctum')
         ->getJson("/api/posts/{$post->id}")
         ->assertJsonPath('data.likes_count', 0);
     expect(Cache::has($key))->toBeTrue();
 
-    // A real like invalidates; the next read recomputes.
     $this->actingAs($liker, 'sanctum')->postJson("/api/posts/{$post->id}/like");
     expect(Cache::has($key))->toBeFalse();
 
@@ -171,41 +167,33 @@ it('caches like counts and invalidates on real state changes only', function () 
         ->assertJsonPath('data.likes_count', 1);
     expect((int) Cache::get($key))->toBe(1);
 
-    // A duplicate like changes no state and must not invalidate the cache.
     $this->actingAs($liker, 'sanctum')
         ->postJson("/api/posts/{$post->id}/like")
         ->assertOk()
         ->assertJsonPath('data.likes_count', 1);
     expect((int) Cache::get($key))->toBe(1);
 
-    // A repeated unlike (nothing to remove) must not invalidate either:
-    // seed a deliberately stale value and prove it survives unchanged,
-    // while the response still reports the source of truth.
+    // A no-op unlike leaves a deliberately stale value untouched.
     Cache::put($key, 999, 60);
     $this->actingAs($liker, 'sanctum')
-        ->deleteJson("/api/posts/{$post->id}/like") // removes the real like
+        ->deleteJson("/api/posts/{$post->id}/like")
         ->assertOk()
         ->assertJsonPath('data.likes_count', 0);
-    expect(Cache::has($key))->toBeFalse(); // state changed, invalidated
+    expect(Cache::has($key))->toBeFalse();
 
     Cache::put($key, 999, 60);
     $this->actingAs($liker, 'sanctum')
-        ->deleteJson("/api/posts/{$post->id}/like") // nothing to remove
+        ->deleteJson("/api/posts/{$post->id}/like")
         ->assertOk()
         ->assertJsonPath('data.likes_count', 0);
-    expect((int) Cache::get($key))->toBe(999); // untouched: no state change
+    expect((int) Cache::get($key))->toBe(999);
 
-    // The injected stale value survives reads until its TTL: reads serve
-    // the cache and never revalidate against the database. This is the
-    // documented consistency window - in real flows only the concurrent
-    // reader/writer race can produce such a stale value, and it is bounded
-    // by the TTL (mutation responses always report the fresh count).
+    // Reads never revalidate; the documented window is TTL-bounded.
     $this->actingAs($author, 'sanctum')
         ->getJson("/api/posts/{$post->id}")
         ->assertJsonPath('data.likes_count', 999);
     expect((int) Cache::get($key))->toBe(999);
 
-    // The next real state change (a like) clears it for good.
     $this->actingAs($author, 'sanctum')->postJson("/api/posts/{$post->id}/like");
     $this->actingAs($author, 'sanctum')
         ->getJson("/api/posts/{$post->id}")
@@ -233,15 +221,12 @@ it('serves warm feed counts from the batched cache read, not the database', func
 
         $this->actingAs($subscriber, 'sanctum')->getJson('/api/feed')->assertOk();
 
-        // Cold page: grouped COUNT for the misses + the liked_by_me lookup.
         $cold = count(array_filter(DB::getQueryLog(), fn ($q) => str_contains($q['query'], '`likes`')));
 
         DB::flushQueryLog();
 
         $this->actingAs($subscriber, 'sanctum')->getJson('/api/feed')->assertOk();
 
-        // Warm page: counts come from Cache::many; only the uncacheable
-        // liked_by_me lookup should touch the likes table.
         $warm = count(array_filter(DB::getQueryLog(), fn ($q) => str_contains($q['query'], '`likes`')));
 
         DB::disableQueryLog();
@@ -253,7 +238,6 @@ it('serves warm feed counts from the batched cache read, not the database', func
 
     expect($cold)->toBe(2)->and($warm)->toBe(1);
 
-    // Sanity: the warm response still shows correct per-user data.
     $warmData = $this->actingAs($subscriber, 'sanctum')->getJson('/api/feed')->json('data');
     foreach ($warmData as $post) {
         expect($post['likes_count'])->toBe(1)->and($post['liked_by_me'])->toBeTrue();

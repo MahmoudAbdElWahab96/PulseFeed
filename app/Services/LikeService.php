@@ -10,27 +10,13 @@ use Illuminate\Support\Facades\Cache;
 
 class LikeService
 {
-    /**
-     * Cache key convention: post:{id}:likes_count. The database is the
-     * source of truth; cached values are only ever invalidated (never
-     * incremented or decremented), so a cached count can never drift
-     * negative or compound an error.
-     */
     public static function countCacheKey(int $postId): string
     {
         return "post:{$postId}:likes_count";
     }
 
     /**
-     * Like a post. Returns [fresh count, whether a new like was created].
-     *
-     * insertOrIgnore against the (user_id, post_id) unique constraint is
-     * race-safe: under concurrency exactly one request inserts a row and
-     * invalidates the cache; the others see "no state change". The cache key
-     * is only forgotten after the insert has committed, and the response
-     * count always comes fresh from the database.
-     *
-     * @return array{0: int, 1: bool}
+     * @return array{0: int, 1: bool} [fresh count, whether a row was created]
      */
     public function like(User $user, Post $post): array
     {
@@ -49,11 +35,7 @@ class LikeService
     }
 
     /**
-     * Unlike a post. Returns [fresh count, whether a like was removed].
-     * Idempotent: removing a nonexistent like changes no state and touches
-     * no cache, so counts can never be decremented twice.
-     *
-     * @return array{0: int, 1: bool}
+     * @return array{0: int, 1: bool} [fresh count, whether a row was removed]
      */
     public function unlike(User $user, Post $post): array
     {
@@ -69,18 +51,11 @@ class LikeService
         return [$this->freshCount($post), $removed];
     }
 
-    /**
-     * Source-of-truth count for mutation responses; bypasses the cache so
-     * the client that just acted always sees the real number.
-     */
     public function freshCount(Post $post): int
     {
         return Like::query()->where('post_id', $post->id)->count();
     }
 
-    /**
-     * Cached count for a single post (post detail views).
-     */
     public function countFor(Post $post): int
     {
         return (int) Cache::remember(
@@ -91,10 +66,9 @@ class LikeService
     }
 
     /**
-     * Attach likes_count and liked_by_me attributes to a page of posts:
-     * one batched MGET for cached counts, one grouped COUNT for misses,
-     * one indexed existence query for the viewer's likes. Never a query
-     * or cache call per post.
+     * Counts are only ever invalidated, never adjusted in cache, so they
+     * cannot drift or go negative; a duplicate like or no-op unlike is a
+     * no-state-change and touches nothing.
      *
      * @param  Collection<int, Post>  $posts
      */
@@ -121,9 +95,8 @@ class LikeService
     }
 
     /**
-     * Counts for many posts: one Cache::many (a single Redis MGET) plus one
-     * grouped COUNT(*) for the misses. The write-back for misses is one SET
-     * per uncached post, bounded by the page size.
+     * One Cache::many (a single MGET) plus one grouped COUNT for the
+     * misses; never a query or cache call per post.
      *
      * @param  array<int, int>  $postIds
      * @return array<int, int>

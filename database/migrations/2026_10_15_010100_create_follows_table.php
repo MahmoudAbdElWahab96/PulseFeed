@@ -15,16 +15,14 @@ return new class extends Migration
             $table->foreignId('followee_id')->constrained('users')->cascadeOnDelete();
             $table->timestamps();
 
-            // Duplicate follows are impossible at the storage layer; also the
-            // driving index for the feed join on follower_id.
+            // Duplicate follows are impossible; also drives the feed join.
             $table->unique(['follower_id', 'followee_id'], 'follows_follower_followee_uniq');
 
-            // Enumerates a user's followers for notification fan-out.
+            // Follower enumeration for notification fan-out.
             $table->index(['followee_id', 'follower_id'], 'follows_followee_follower_idx');
         });
 
-        // Self-follow is rejected by the database itself, in addition to
-        // application-level validation. MySQL enforces CHECK from 8.0.16+.
+        // Self-follow rejected by the database itself; MySQL enforces CHECK from 8.0.16.
         if (DB::getDriverName() === 'mysql') {
             DB::statement('ALTER TABLE follows ADD CONSTRAINT chk_follows_no_self_follow CHECK (follower_id <> followee_id)');
         }

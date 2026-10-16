@@ -2,31 +2,17 @@
 
 namespace App\Support;
 
-use Illuminate\Contracts\Pagination\CursorPaginator as CursorPaginatorContract;
 use Illuminate\Pagination\Cursor;
 use Illuminate\Pagination\CursorPaginator;
 use Illuminate\Pagination\Paginator;
 
 /**
- * A feed page replayed from cache: models are rehydrated from the cached
- * ordered post IDs, while the cursor bookends are the exact strings the
- * original page produced. Overriding the cursor accessors (instead of
- * re-deriving them from hydrated items) keeps meta.next_cursor,
- * meta.prev_cursor, and the page URLs byte-identical to a fresh page.
- *
- * @template TKey of array-key
- *
- * @template-covariant TValue
- *
- * @extends CursorPaginator<TKey, TValue>
- *
- * @implements CursorPaginatorContract<TKey, TValue>
+ * A feed page replayed from cache. The cursor accessors return the exact
+ * strings the original page produced, so meta and page URLs stay identical
+ * to a freshly computed page.
  */
 class HydratedFeedPage extends CursorPaginator
 {
-    /**
-     * @param  iterable<TKey, TValue>  $items
-     */
     public function __construct(
         $items,
         int $perPage,

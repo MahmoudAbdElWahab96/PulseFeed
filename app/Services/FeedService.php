@@ -12,23 +12,14 @@ use Illuminate\Support\Facades\Cache;
 
 class FeedService
 {
-    /**
-     * Bounded page size: default 20, hard ceiling 50.
-     */
     public const DEFAULT_LIMIT = 20;
 
     public const MAX_LIMIT = 50;
 
     /**
-     * The user's feed page: posts from accounts they follow, newest first
-     * with a deterministic (created_at DESC, id DESC) order that cursor
-     * pagination walks via the tuple predicate (created_at, id).
-     *
-     * The ordered page (post IDs plus cursor bookends) is cached per user
-     * for a short TTL; cache hits rehydrate the models - authors and like
-     * metadata are always fetched fresh for the current page - so no user's
-     * entry can ever be served to another, and per-post data goes stale
-     * only as far as each sub-cache allows.
+     * The cached payload is the ordered post IDs plus the cursor bookends;
+     * hits rehydrate models, authors, and like metadata fresh, so entries
+     * are per-user and user-specific data is never replayed.
      */
     public function paginate(User $subscriber, int $limit, ?string $cursor): CursorPaginator
     {
@@ -58,25 +49,19 @@ class FeedService
     }
 
     /**
-     * Cache key per user, feed-graph version, page size, and cursor. The
-     * version component lets a follow/unfollow invalidate every cached page
-     * for that user with a single O(1) increment instead of key scans.
+     * The version component lets a follow/unfollow invalidate every cached
+     * page for a user with one increment instead of key scans.
      */
     public function pageCacheKey(User $subscriber, int $limit, ?string $cursor): string
     {
         $version = (int) Cache::get(self::versionKey($subscriber->id), 0);
 
-        // Normalized here as well so external callers derive exactly the
-        // key paginate() uses for the same request parameters.
         $cursor = $this->normalizeCursor($cursor);
         $cursorPart = $cursor === null ? 'first' : hash('sha256', $cursor);
 
         return "feed:{$subscriber->id}:v{$version}:{$limit}:{$cursorPart}";
     }
 
-    /**
-     * Called by FollowService after the follow graph actually changes.
-     */
     public static function invalidateForUser(int $userId): void
     {
         Cache::increment(self::versionKey($userId));
@@ -87,11 +72,6 @@ class FeedService
         return "feed:{$userId}:version";
     }
 
-    /**
-     * A cursor that does not decode to a valid Cursor object is treated as
-     * absent, before it can influence cache keys (Laravel's paginator
-     * applies the same leniency when reading the request).
-     */
     private function normalizeCursor(?string $cursor): ?string
     {
         if ($cursor === null || Cursor::fromEncoded($cursor) === null) {
@@ -112,8 +92,7 @@ class FeedService
             ->get()
             ->keyBy('id');
 
-        // Preserve the cached order; posts deleted since caching simply
-        // drop out of the page.
+        // Cached order wins; posts deleted since caching drop out.
         $items = (new Collection($cached['ids']))
             ->filter(fn (int $id) => $posts->has($id))
             ->map(fn (int $id) => $posts[$id])
@@ -122,11 +101,6 @@ class FeedService
         return new HydratedFeedPage($items, $limit, $cached['next_cursor'], $cached['prev_cursor']);
     }
 
-    /**
-     * The join drives from the follows index (follower_id, followee_id) and
-     * then matches posts on (user_id, created_at, id); the user's own posts
-     * are excluded because a self-follow row cannot exist.
-     */
     private function runQuery(User $subscriber, int $limit, ?string $cursor): CursorPaginator
     {
         return Post::query()

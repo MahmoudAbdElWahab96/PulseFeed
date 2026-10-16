@@ -10,24 +10,15 @@ use Throwable;
 
 class PostService
 {
-    /**
-     * Create a post and queue the notification fan-out. The 201 response
-     * never waits for follower processing: the walker runs on the queue.
-     */
     public function create(User $author, string $content): Post
     {
         $post = $author->posts()->create(['content' => $content]);
 
         try {
-            // Dispatched only after the surrounding database transaction
-            // (if any) commits; with the plain autocommitted insert used
-            // here it fires immediately after the row is durable.
             FanOutPostNotifications::dispatch($post->id)->afterCommit();
         } catch (Throwable $e) {
-            // The post itself is durable; a queue outage must not fail the
-            // write. This is a dispatch failure, not a delivery: no
-            // notification rows exist for this post until the fan-out is
-            // (re)queued successfully.
+            // The post is durable; a queue outage degrades to lost fan-out
+            // (logged), never a failed write.
             Log::error('Post notification fan-out could not be queued.', [
                 'post_id' => $post->id,
                 'error_class' => $e::class,

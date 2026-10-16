@@ -14,10 +14,7 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
-    /**
-     * Hash of a fixed dummy credential, checked when the email is unknown so
-     * that failed logins take comparable time whether or not the email exists.
-     */
+    /** Checked when the email is unknown, so both failure paths pay the same bcrypt cost. */
     private const DUMMY_HASH = '$2y$12$PTPwi1xWzwg4jvARnJV9D.QgLPZPOeKs3c.p51yCbmreIDBAdSyhC';
 
     public function register(RegisterRequest $request): JsonResponse
@@ -27,7 +24,6 @@ class AuthController extends Controller
         return response()->json([
             'data' => [
                 'user' => (new UserResource($user))->markAsOwn(),
-                // Plain-text token is returned only here, at issuance time.
                 'token' => $user->createToken('api')->plainTextToken,
             ],
         ], 201);
@@ -39,8 +35,6 @@ class AuthController extends Controller
 
         $user = User::query()->where('email', $credentials['email'])->first();
 
-        // Same generic error for unknown email and wrong password; the dummy
-        // hash keeps both failure paths on the same bcrypt cost.
         if (! Hash::check($credentials['password'], $user?->password ?? self::DUMMY_HASH)) {
             throw ValidationException::withMessages([
                 'email' => __('These credentials do not match our records.'),
@@ -60,10 +54,6 @@ class AuthController extends Controller
         return new UserResource($request->user());
     }
 
-    /**
-     * Revoke only the token used for this request, leaving the user's other
-     * sessions untouched.
-     */
     public function logout(Request $request): JsonResponse
     {
         $request->user()->currentAccessToken()->delete();

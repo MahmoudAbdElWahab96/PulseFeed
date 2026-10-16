@@ -122,8 +122,7 @@ it('paginates without duplicates or gaps across cursors, including ties', functi
     $authors = User::factory()->count(3)->create();
     $subscriber->following()->attach($authors);
 
-    // 25 posts, several sharing the same timestamp to exercise the compound
-    // cursor across ties.
+    // Several posts share a timestamp to exercise the compound cursor.
     foreach (range(1, 25) as $i) {
         createPostAt($authors[$i % 3], '2026-01-01 '.sprintf('%02d', intdiv($i, 2)).':00:00', "post {$i}");
     }
@@ -147,7 +146,6 @@ it('paginates without duplicates or gaps across cursors, including ties', functi
         ->and(count($seen))->toBe(25)
         ->and(count(array_unique(array_column($seen, 'id'))))->toBe(25);
 
-    // The concatenated walk must equal global newest-first order.
     $walkedIds = array_column($seen, 'id');
     $expected = Post::query()
         ->whereIn('user_id', $authors->pluck('id'))
@@ -206,8 +204,7 @@ it('issues a fixed number of queries regardless of page contents (no N+1)', func
     }
 
     $countQueries = function () use ($subscriber) {
-        // Both measurements must take the uncached query path: feed pages
-        // and like counts are cached per user, so flush between runs.
+        // Both measurements must take the uncached path.
         Cache::flush();
 
         DB::flushQueryLog();
@@ -222,8 +219,8 @@ it('issues a fixed number of queries regardless of page contents (no N+1)', func
 
     $withFiveAuthors = $countQueries();
 
-    // Twenty more posts from twenty new authors; if author resolution or
-    // like metadata were per-post, the query count would grow with the page.
+    // If author resolution or like metadata were per-post, the query
+    // count would grow with the page.
     $moreAuthors = User::factory()->count(20)->create();
     $subscriber->following()->attach($moreAuthors);
     foreach ($moreAuthors as $author) {
@@ -232,7 +229,6 @@ it('issues a fixed number of queries regardless of page contents (no N+1)', func
 
     $withTwentyFiveAuthors = $countQueries();
 
-    // Budget: feed join, eager authors, grouped like counts, liked_by_me.
     expect($withFiveAuthors)->toBeLessThanOrEqual(4)
         ->and($withTwentyFiveAuthors)->toBe($withFiveAuthors);
 });

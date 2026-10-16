@@ -14,11 +14,9 @@ return new class extends Migration
             $table->foreignId('follower_id')->constrained('users')->cascadeOnDelete();
             $table->timestamps();
 
-            // Fan-out jobs write with insertOrIgnore; this constraint makes
-            // job retries side-effect-free (no duplicate notifications).
+            // Fan-out writes use insertOrIgnore: job retries cannot duplicate.
             $table->unique(['post_id', 'follower_id'], 'post_notifications_post_follower_uniq');
 
-            // A follower's notification inbox.
             $table->index('follower_id', 'post_notifications_follower_idx');
         });
     }

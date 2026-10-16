@@ -9,12 +9,14 @@ use Illuminate\Http\Request;
 
 class FollowController extends Controller
 {
-    public function __construct(private readonly FollowService $follows) {}
+    public function __construct(
+        private readonly FollowService $follows,
+    ) {
+        //
+    }
 
     public function store(Request $request, string $userId): JsonResponse
     {
-        // The authenticated user is always the follower; any follower_id
-        // supplied by the client is ignored.
         $created = $this->follows->follow($request->user(), (int) $userId);
 
         return response()->json([

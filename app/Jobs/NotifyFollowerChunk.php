@@ -12,16 +12,15 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Inserts notification rows for one bounded chunk of follower IDs.
- *
- * Idempotency: the write is insertOrIgnore against the UNIQUE
- * (post_id, follower_id) constraint, so any retry of this job - or a
- * duplicate dispatch produced by a retried walker - can never create a
- * second notification for the same (post, follower) pair.
+ * insertOrIgnore against UNIQUE (post_id, follower_id): retries and
+ * duplicate dispatches cannot create a second notification.
  */
 class NotifyFollowerChunk implements ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable;
+    use InteractsWithQueue;
+    use Queueable;
+    use SerializesModels;
 
     public int $tries = 5;
 

@@ -21,7 +21,6 @@ class FeedController extends Controller
         $validated = $request->validate([
             'limit' => ['nullable', 'integer', 'min:1', 'max:'.FeedService::MAX_LIMIT],
             'cursor' => ['nullable', 'string'],
-            // A malformed cursor decodes to null and is served the first page.
         ]);
 
         $limit = $validated['limit'] ?? FeedService::DEFAULT_LIMIT;
@@ -32,8 +31,7 @@ class FeedController extends Controller
             $validated['cursor'] ?? null
         );
 
-        // Like metadata for the whole page in batched queries; also runs on
-        // cache hits, since it is user-specific and never cached per post.
+        // User-specific, so it runs on cache hits too.
         $this->likes->hydrate($posts->getCollection(), $request->user());
 
         return PostResource::collection($posts);

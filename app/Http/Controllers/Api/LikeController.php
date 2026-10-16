@@ -10,13 +10,14 @@ use Illuminate\Http\Request;
 
 class LikeController extends Controller
 {
-    public function __construct(private readonly LikeService $likes) {}
+    public function __construct(
+        private readonly LikeService $likes,
+    ) {
+        //
+    }
 
     public function store(Request $request, Post $post): JsonResponse
     {
-        // The authenticated user is always the liker; a client-supplied
-        // user_id is never read. 201 the first time, 200 for the idempotent
-        // duplicate that changed no state.
         [$count, $created] = $this->likes->like($request->user(), $post);
 
         return response()->json([

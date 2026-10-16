@@ -11,11 +11,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
  */
 class UserResource extends JsonResource
 {
-    /**
-     * Set by endpoints that respond with the user's own freshly issued
-     * profile (register/login), where no authenticated request user exists
-     * yet to compare against.
-     */
+    /** Set by register/login, where no authenticated user exists to compare against. */
     public bool $own = false;
 
     public function markAsOwn(): static
@@ -26,8 +22,7 @@ class UserResource extends JsonResource
     }
 
     /**
-     * Email is only exposed for the authenticated user themselves; other
-     * embeds (post authors, follow targets) never leak it.
+     * Email is only exposed for the requesting user themselves.
      *
      * @return array<string, mixed>
      */

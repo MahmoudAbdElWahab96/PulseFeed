@@ -337,6 +337,41 @@ Four levels of verification were used, and they are not interchangeable:
    29.5.2): full request path through nginx + php-fpm, plus the queue worker
    processing the fan-out inside containers. Not a production-hardening test.
 
+## Benchmark data
+
+A dedicated command bulk-seeds a parameterized dataset for load testing
+(batched raw SQL over recursive CTEs — never Eloquent factories; deterministic
+multiplicative hashing instead of `RAND()`, which collapses inside
+`INSERT ... SELECT` over recursive CTEs on MySQL):
+
+```bash
+# Defaults: 100k users, 1M posts, ~1M follows, 2M likes, 10 "celebrities"
+php artisan pulsefeed:seed-benchmark --fresh
+
+# Custom shape (additive without --fresh)
+php artisan pulsefeed:seed-benchmark --users=250000 --posts=3000000 --likes=5000000 --chunk=20000
+```
+
+It also creates three fixed login accounts — `bench-sub-500@bench.local`,
+`bench-sub-5000@bench.local`, `bench-sub-50000@bench.local` (password
+`sup3r-secret`) — following 500 / 5,000 / 50,000 authors respectively, so the
+feed endpoint itself can be benchmarked at controlled follow-graph sizes.
+**Verified locally** (Homebrew MySQL, single connection, no concurrent load —
+indicative, not capacity proof):
+
+- Full default seed: **100,003 users / 1,000,000 posts / 1,019,307 follows /
+  2,000,000 likes in ~70 s** (users 1.1 s, posts 8.5 s, follows 7.5 s,
+  likes 50.8 s).
+- Feed over HTTP as `bench-sub-50000` (50k followed authors, 1M posts):
+  cold first page **44 ms**, cached repeat **15 ms**, cursor page 2 **30 ms**
+  — all fully hydrated (author, `likes_count`, `liked_by_me`).
+- Deep cursor page at depth **500,000** for the same subscriber:
+  **4.8 ms** average over 10 runs. EXPLAIN at that depth shows the optimizer
+  switching from the global `(created_at, id)` index scan to a
+  follows-driven merge with a filesort across the 50k followed authors —
+  still single-digit milliseconds here, and exactly the celebrity-scale cost
+  growth described in the scaling section below.
+
 ## Architecture decisions and tradeoffs
 
 - **Modular monolith**, thin controllers, services only where logic earns them
@@ -348,12 +383,8 @@ Four levels of verification were used, and they are not interchangeable:
 - **Constraints over code:** uniqueness, self-follow prevention, and referential
   integrity all live in the schema; application code races degrade into idempotent
   no-ops instead of corruption.
-- **Known limitations:** like-count staleness window (TTL-bounded); feed staleness
-  for new posts (TTL-bounded); no automatic reconciliation of exhausted fan-out
-  retries; no rate limiting on write endpoints; single-region single-instance
-  assumptions (no horizontal Redis/MySQL topology).
 
-### Scaling to 5M users / 500k posts per day — honestly
+### Scaling to 5M users / 500k posts per day
 
 500,000 posts/day averages **≈ 5.8 posts/second**; realistic peaks (timezones,
 viral content) can multiply that by 10–50×. The reasoning below explains design
@@ -394,7 +425,8 @@ contention, not multi-node topology.
 
 **Before claiming production readiness:** load tests at target RPS (k6/Locust:
 feed reads, like storms, post-create bursts with realistic follow graphs),
-concurrency tests for constraint races, MySQL sizing and replication review, Redis
+concurrency tests for constraint races, rate limiting on the write endpoints
+(only login is throttled today), MySQL sizing and replication review, Redis
 memory/topology planning, queue backlog and failure monitoring, a reconciliation
 mechanism for exhausted fan-out, and capacity planning tied to measured percentiles
 rather than averages.

@@ -12,14 +12,11 @@ use Illuminate\Database\Eloquent\Factories\Factory;
 class PostFactory extends Factory
 {
     /**
-     * Define the model's default state.
-     *
      * @return array<string, mixed>
      */
     public function definition(): array
     {
-        // Words, not realText(): Faker's Text provider accumulates large
-        // internal buffers and exhausts memory across a full test suite.
+        // Faker's realText() exhausts memory across a full suite; words() does not.
         return [
             'user_id' => User::factory(),
             'content' => str(fake()->words(rand(8, 40), true))->title()->toString(),

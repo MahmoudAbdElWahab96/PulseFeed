@@ -9,10 +9,6 @@ use Illuminate\Validation\ValidationException;
 class FollowService
 {
     /**
-     * Follow a target user as the given follower. Returns true when a new
-     * relationship was created, false when it already existed. insertOrIgnore
-     * against the unique constraint keeps concurrent duplicate requests safe.
-     *
      * @throws ValidationException when the target is the follower themselves
      */
     public function follow(User $follower, int $targetId): bool
@@ -33,8 +29,6 @@ class FollowService
         ]);
 
         if ($created) {
-            // The follower's feed graph changed; all their cached feed
-            // pages are invalidated with one version bump.
             FeedService::invalidateForUser($follower->id);
         }
 
@@ -42,9 +36,6 @@ class FollowService
     }
 
     /**
-     * Unfollow a target user. Returns true when a relationship was removed,
-     * false when none existed (idempotent).
-     *
      * @throws ValidationException when the target is the follower themselves
      */
     public function unfollow(User $follower, int $targetId): bool

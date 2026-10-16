@@ -44,14 +44,11 @@ it('serves a cached feed page identically and with fewer queries on hit', functi
     $second->assertOk();
     $hitQueries = count(DB::getQueryLog()) - $missQueries;
 
-    // The cached page replays byte-identically, cursors included.
     expect($second->getContent())->toBe($first->getContent());
 
-    // On the hit, the ranking join is skipped; only hydration runs.
     expect($hitQueries)->toBeLessThan($missQueries)
         ->and($hitQueries)->toBeGreaterThanOrEqual(3);
 
-    // The page is actually cached under the per-user key.
     expect(Cache::has(feedKey($subscriber)))->toBeTrue();
 });
 
@@ -60,7 +57,6 @@ it('never serves one user\'s cached feed to another user', function () {
     $bob = User::factory()->create();
     $bob->following()->attach($author);
 
-    // Alice likes everything; Bob likes nothing.
     $author->posts->each(function ($post) use ($alice) {
         DB::table('likes')->insert([
             'user_id' => $alice->id, 'post_id' => $post->id,
@@ -68,10 +64,8 @@ it('never serves one user\'s cached feed to another user', function () {
         ]);
     });
 
-    // Warm Alice's cache.
     $aliceResponse = $this->actingAs($alice, 'sanctum')->getJson('/api/feed')->assertOk();
 
-    // Bob's request must resolve liked_by_me for Bob, not replay Alice's.
     $bobResponse = $this->actingAs($bob, 'sanctum')->getJson('/api/feed')->assertOk();
 
     expect($bobResponse->getContent())->not->toBe($aliceResponse->getContent());
@@ -84,7 +78,6 @@ it('never serves one user\'s cached feed to another user', function () {
         expect($post['liked_by_me'])->toBeFalse();
     }
 
-    // Distinct cache entries per user.
     expect(feedKey($bob))->not->toBe(feedKey($alice));
 });
 
@@ -96,7 +89,6 @@ it('invalidates all cached feed pages when the follow graph changes', function (
     $beforeKey = feedKey($subscriber);
     expect(Cache::has($beforeKey))->toBeTrue();
 
-    // A new author with a newer post, followed after the page was cached.
     $newAuthor = User::factory()->create();
     $post = Post::factory()->for($newAuthor, 'author')->make(['content' => 'fresh voice']);
     $post->created_at = Carbon::parse('2026-02-01 00:00:00');
@@ -106,11 +98,9 @@ it('invalidates all cached feed pages when the follow graph changes', function (
         ->postJson("/api/follow/{$newAuthor->id}")
         ->assertCreated();
 
-    // The old version's entries are orphaned under a new version number.
-    expect(Cache::has($beforeKey))->toBeTrue() // old entry lingers until TTL...
+    expect(Cache::has($beforeKey))->toBeTrue() // lingers until its TTL
         ->and(feedKey($subscriber))->not->toBe($beforeKey);
 
-    // And the feed immediately reflects the new author despite the TTL.
     $this->actingAs($subscriber, 'sanctum')
         ->getJson('/api/feed')
         ->assertOk()
@@ -122,8 +112,7 @@ it('bounds feed staleness to the TTL for new posts by followed authors', functio
 
     $this->actingAs($subscriber, 'sanctum')->getJson('/api/feed')->assertOk();
 
-    // A newer post from an already-followed author: no invalidation in this
-    // phase, so the cached page is served until the TTL elapses.
+    // No invalidation for new posts by followed authors: TTL-bounded.
     $post = Post::factory()->for($author, 'author')->make(['content' => 'brand new']);
     $post->created_at = Carbon::parse('2026-03-01 00:00:00');
     $post->save();
@@ -133,7 +122,6 @@ it('bounds feed staleness to the TTL for new posts by followed authors', functio
         ->assertOk()
         ->assertJsonMissing(['content' => 'brand new']);
 
-    // Once the cached page expires, the post appears.
     Cache::flush();
 
     $this->actingAs($subscriber, 'sanctum')
@@ -147,13 +135,11 @@ it('normalizes malformed cursors and default limits into one cache key', functio
 
     $this->actingAs($subscriber, 'sanctum')->getJson('/api/feed?limit=20')->assertOk();
 
-    // limit omitted (defaults to 20) and a garbage cursor (treated as first
-    // page) must resolve to the same key as the explicit first page.
+    // Omitted limit and a garbage cursor resolve to the first-page key.
     expect(feedKey($subscriber, 20, null))
         ->toBe(feedKey($subscriber, 20, 'not-a-valid-cursor'))
         ->toBe(feedKey($subscriber));
 
-    // And the garbage-cursor request hits that cache rather than erroring.
     $response = $this->actingAs($subscriber, 'sanctum')->getJson('/api/feed?cursor='.urlencode('garbage!'));
     $response->assertOk()->assertJsonCount(3, 'data');
 });
@@ -163,7 +149,6 @@ it('drops posts deleted after caching instead of erroring', function () {
 
     $this->actingAs($subscriber, 'sanctum')->getJson('/api/feed')->assertOk();
 
-    // Delete the newest post directly; the cached page still lists its id.
     Post::query()->orderByDesc('id')->first()->delete();
 
     $this->actingAs($subscriber, 'sanctum')

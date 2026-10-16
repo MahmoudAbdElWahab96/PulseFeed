@@ -14,12 +14,10 @@ return new class extends Migration
             $table->string('content', 1000);
             $table->timestamps();
 
-            // Serves the feed join (follower -> authors -> newest posts) and
-            // doubles as the index backing the user_id foreign key.
+            // Feed join per author; also backs the user_id foreign key.
             $table->index(['user_id', 'created_at', 'id'], 'posts_user_created_id_idx');
 
-            // Serves the deterministic (created_at DESC, id DESC) cursor order
-            // when the optimizer prefers a single scan over merged author ranges.
+            // Deterministic (created_at DESC, id DESC) cursor order.
             $table->index(['created_at', 'id'], 'posts_created_id_idx');
         });
     }
