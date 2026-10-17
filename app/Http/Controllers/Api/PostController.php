@@ -8,11 +8,13 @@ use App\Http\Resources\PostResource;
 use App\Models\Post;
 use App\Services\LikeService;
 use App\Services\PostService;
+use Dedoc\Scramble\Attributes\Group;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\Collection;
 
+#[Group('Posts', 'Creating a post queues notifications to every follower.', weight: 2)]
 class PostController extends Controller
 {
     public function __construct(

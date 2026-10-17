@@ -7,11 +7,13 @@ use App\Http\Requests\LoginRequest;
 use App\Http\Requests\RegisterRequest;
 use App\Http\Resources\UserResource;
 use App\Models\User;
+use Dedoc\Scramble\Attributes\Group;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
+#[Group('Auth', 'Registration, login, and token management.', weight: 0)]
 class AuthController extends Controller
 {
     private const DUMMY_HASH = '$2y$12$PTPwi1xWzwg4jvARnJV9D.QgLPZPOeKs3c.p51yCbmreIDBAdSyhC';

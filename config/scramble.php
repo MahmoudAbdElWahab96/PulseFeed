@@ -52,16 +52,42 @@ return [
         /*
          * API version.
          */
-        'version' => env('API_VERSION', '0.0.1'),
+        'version' => env('API_VERSION', '1.0.0'),
 
         /*
          * Description rendered on the home page of the API documentation (`/docs/api`).
          */
-        'description' => '',
+        'description' => <<<'MD'
+A news feed API: follow people, publish posts, like them, and read a personalized feed.
+
+## Authentication
+Call `POST /register` or `POST /login` to get a token, then send it on every other request:
+
+```
+Authorization: Bearer <token>
+Accept: application/json
+```
+
+## Pagination
+`GET /feed` uses cursor pagination. Follow `links.next` until it is `null`; `limit` (1–50, default 20) is kept across pages.
+
+## Rate limits
+| Scope | Limit |
+|---|---|
+| Login | 5 / min per email + IP |
+| Register | 10 / min per IP |
+| Authenticated requests | 120 / min per user |
+| Writes (follow, post, like) | 30 / min per user |
+
+Exceeding a limit returns `429` with a `Retry-After` header.
+
+## Errors
+Errors are JSON with a `message`. Validation failures (`422`) also include `errors`, keyed by field.
+MD,
     ],
 
     'ui' => [
-        'title' => null,
+        'title' => 'PulseFeed API Reference',
     ],
 
     /*
@@ -69,10 +95,10 @@ return [
      * SCRAMBLE_DEV_TOOLS value takes precedence over APP_DEBUG.
      */
     'dev_tools' => [
-        'enabled' => env('SCRAMBLE_DEV_TOOLS', env('APP_DEBUG', false)),
+        'enabled' => env('SCRAMBLE_DEV_TOOLS', false),
     ],
 
-    'renderer' => 'elements',
+    'renderer' => 'scalar',
 
     'renderers' => [
         /*
@@ -93,12 +119,14 @@ return [
          */
         'scalar' => [
             'view' => 'scramble::scalar',
-            'cdn' => 'https://cdn.jsdelivr.net/npm/@scalar/api-reference',
-            'theme' => 'laravel',
-            'proxyUrl' => 'https://proxy.scalar.com',
-            'darkMode' => false,
+            'cdn' => 'https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.72.4',
+            'theme' => 'default',
+            'darkMode' => true,
+            'hideClientButton' => true,
+            'defaultHttpClient' => ['targetKey' => 'shell', 'clientKey' => 'curl'],
             'showDeveloperTools' => 'never',
             'agent' => ['disabled' => true],
+            'customCss' => '.scalar-mcp-layer { display: none; }',
             'credentials' => 'include',
         ],
     ],

@@ -7,8 +7,10 @@ use App\Http\Requests\FeedRequest;
 use App\Http\Resources\PostResource;
 use App\Services\FeedService;
 use App\Services\LikeService;
+use Dedoc\Scramble\Attributes\Group;
 use Illuminate\Http\Resources\Json\JsonResource;
 
+#[Group('Feed', weight: 3)]
 class FeedController extends Controller
 {
     public function __construct(
