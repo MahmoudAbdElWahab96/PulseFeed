@@ -2,13 +2,16 @@ name: pulsefeed
 
 services:
   app:
+    image: pulsefeed-app:local
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args:
+        INSTALL_DEV: "true"
     environment: &laravel-env
       APP_ENV: "${APP_ENV:-local}"
       APP_DEBUG: "${APP_DEBUG:-true}"
-      APP_KEY: "${APP_KEY}"
+      APP_KEY: "${APP_KEY:-base64:cHVsc2VmZWVkLWxvY2FsLWRldi1rZXktMzJieXRlcyE=}"
       RUN_MIGRATIONS: "1"
       REBUILD_AUTOLOADER: "${REBUILD_AUTOLOADER:-1}"
       DB_CONNECTION: mysql
@@ -35,10 +38,8 @@ services:
     restart: unless-stopped
 
   queue:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-    command: php artisan queue:work redis --tries=3 --backoff=5,10,30 --max-time=3600
+    image: pulsefeed-app:local
+    command: php artisan queue:work redis --max-time=3600
     environment: *laravel-env
     volumes:
       - .:/var/www
@@ -70,8 +71,9 @@ services:
       MYSQL_ROOT_PASSWORD: secret
     volumes:
       - mysql-data:/var/lib/mysql
+      - ./docker/mysql-init.sql:/docker-entrypoint-initdb.d/01-testing-db.sql:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot", "-psecret"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-psecret"]
       interval: 5s
       timeout: 3s
       retries: 20
