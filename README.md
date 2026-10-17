@@ -1,432 +1,308 @@
 # PulseFeed — News Feed API
 
-A production-minded REST API for a simplified Twitter/Instagram-style feed: accounts,
-following, posts, a personalized cursor-paginated feed, likes, Redis caching, and
-asynchronous follower notifications via queued jobs. Built as a modular monolith in
-Laravel with MySQL and Redis.
+A Twitter/Instagram-style feed API built with Laravel 13, MySQL 8.4 and Redis.
+Users register, follow each other, publish posts, like posts, and read a
+personalized, cursor-paginated feed. New posts notify followers through a
+queued, chunked fan-out.
 
-> Assignment submission for Augustus Media — Senior Backend Developer.
-> Every measured number in this document lists the environment it was measured in.
-> The Docker Compose stack was built and executed on the development machine
-> (Docker Engine 29.5.2) after the initial native development; see [Docker](#docker)
-> for exactly what was and was not verified inside containers.
+## Contents
 
-## Implemented features
+- [Setup](#setup)
+- [API](#api)
+- [Architecture](#architecture)
+- [Database & indexes](#database--indexes)
+- [Feed](#feed)
+- [Caching](#caching)
+- [Queue & notifications](#queue--notifications)
+- [Rate limiting](#rate-limiting)
+- [Scaling to 5M users / 500k posts per day](#scaling-to-5m-users--500k-posts-per-day)
+- [Testing](#testing)
+- [Benchmark data](#benchmark-data)
 
-- Registration, login, logout (Sanctum personal access tokens), current-user endpoint.
-- Login throttling: 5 attempts/min per normalized email + IP, generic 422 bodies that
-  do not reveal whether an email exists (with timing-equalized bcrypt failures).
-- Follow / unfollow with idempotent duplicate handling; self-follow is rejected at the
-  validation layer *and* by a database CHECK constraint.
-- Post creation, retrieval, owner-only deletion (policy + 403).
-- Personalized feed: posts from followed users only, `created_at DESC, id DESC`
-  deterministic ordering, cursor pagination, bounded page size (default 20, max 50).
-- `likes_count` and per-user `liked_by_me` on posts and feed items, computed in
-  batched queries — never per post.
-- Redis caching for like counts and feed pages, invalidation-only semantics.
-- Asynchronous notification fan-out to followers through queued, chunked, idempotent
-  jobs on the Redis queue.
-- Pest test suite covering all endpoints, constraints, cache behavior, pagination
-  correctness, N+1 regression guards, and job idempotency.
+## Setup
 
-## Stack and versions (verified locally)
-
-| Component | Version used | Notes |
-|---|---|---|
-| PHP | 8.4.23 | extensions: `pdo_mysql`, `phpredis` |
-| Laravel | 13.36.0 | Sanctum 4.x API tokens |
-| MySQL | 26.7.0 (Homebrew) | dev machine; compose pins `mysql:8.4` LTS |
-| Redis | 8.10.1 (Homebrew) | compose pins `redis:8` |
-| Pest | 4.7 | via `composer test` / `vendor/bin/pest` |
-
-## Local setup (native)
+### Docker (recommended)
 
 ```bash
-git clone <repository> pulsefeed && cd pulsefeed
+git clone https://github.com/MahmoudAbdElWahab96/PulseFeed.git && cd PulseFeed
+docker compose up -d --build
+```
+
+That's all — no `.env` needed. The stack runs five services: `nginx` (port 8080),
+`app` (PHP-FPM, runs migrations on start), `queue` (queue worker), `mysql` and
+`redis`. The API is at `http://localhost:8080/api` and interactive OpenAPI docs at
+`http://localhost:8080/docs/api`.
+
+Run the test suite inside the container (it uses a separate `pulsefeed_testing`
+database created automatically on first start):
+
+```bash
+docker compose exec app php vendor/bin/pest
+```
+
+Compose ships a local-only fallback `APP_KEY`; set `APP_KEY` in the environment for
+anything beyond local use. Host ports can be changed with `APP_PORT`,
+`FORWARD_DB_PORT` and `FORWARD_REDIS_PORT`.
+
+### Native
+
+Requires PHP 8.3+ (`pdo_mysql`, `redis`), MySQL 8.0.16+ and Redis.
+
+```bash
 composer install
 cp .env.example .env
 php artisan key:generate
 
-# Create the databases (adjust credentials for your MySQL)
-mysql -u root -e "CREATE DATABASE pulsefeed CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-mysql -u root -e "CREATE DATABASE pulsefeed_testing CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+mysql -u root -e "CREATE DATABASE pulsefeed; CREATE DATABASE pulsefeed_testing;"
+php artisan migrate
 
-php artisan migrate --force      # dev database
-DB_DATABASE=pulsefeed_testing php artisan migrate --force   # test database (see phpunit.xml)
-
-php artisan serve                # http://127.0.0.1:8000
-php artisan queue:work redis     # in a second terminal: notification fan-out worker
+php artisan serve              # http://127.0.0.1:8000
+php artisan queue:work redis   # second terminal
 ```
 
-`.env` defaults expect MySQL on 127.0.0.1 with an unprivileged-to-root user and Redis
-on 127.0.0.1:6379 (`QUEUE_CONNECTION=redis`, `CACHE_STORE=redis`). Optional tunables:
-`LIKES_COUNT_CACHE_TTL` (default 600 s) and `FEED_PAGE_CACHE_TTL` (default 30 s).
+Tests: `vendor/bin/pest`. They default to `root` with no password on
+`127.0.0.1:3306`; override with e.g. `DB_USERNAME=app DB_PASSWORD=secret vendor/bin/pest`.
 
-### Commands
+### Configuration
 
-| Command | Purpose |
-|---|---|
-| `php artisan serve` | Run the API |
-| `php artisan queue:work redis` | Process notification jobs |
-| `composer test` / `vendor/bin/pest` | Full test suite (needs `pulsefeed_testing` DB) |
-| `vendor/bin/pint` | Code style |
-| `php artisan route:list --path=api` | Endpoint inventory |
-| `/docs/api` (running server) | Auto-generated OpenAPI 3.1 docs (Scramble), also served at `:8080/docs/api` under Docker |
+| Variable | Default | Purpose |
+|---|---|---|
+| `FEED_PAGE_CACHE_TTL` | 30 | Seconds a feed page stays cached |
+| `LIKES_COUNT_CACHE_TTL` | 600 | Seconds a like count stays cached |
+| `RATE_LIMIT_READS` | 120 | Authenticated reads per user per minute |
+| `RATE_LIMIT_WRITES` | 30 | Writes per user per minute |
+| `RATE_LIMIT_REGISTER` | 10 | Registrations per IP per minute |
 
-Interactive API documentation is generated by [Scramble](https://scramble.dedoc.co)
-directly from the routes, Form Requests, and API Resources — the spec at
-`/docs/api.json` declares the bearer scheme globally and marks `/register` and
-`/login` public. It is available in local environments (restricted otherwise).
+## API
 
-## Docker
+All endpoints are under `/api`, accept and return JSON, and (except register/login)
+require `Authorization: Bearer <token>`.
 
-`docker-compose.yml` defines five services: `nginx` (port 8080), `app` (php:8.4-fpm,
-runs `migrate --force` via entrypoint before serving), `queue` (`queue:work redis`),
-`mysql:8.4`, and `redis:8` — with volumes, health checks, and Laravel configuration
-injected through environment variables that override `.env`.
-
-**Verified on the development machine** (Docker Engine 29.5.2, macOS host) after the
-native development was complete:
-
-- `docker compose up -d --build` brought up all five services; `mysql` and `redis`
-  reported healthy per their health checks.
-- The full request path through nginx + php-fpm worked: `/up` health check 200,
-  registration, login, follow (201), post creation (201) with the complete resource
-  shape (`likes_count`, `liked_by_me`), and like (201 with count).
-- The `queue` container executed the real fan-out end to end: `FanOutPostNotifications`
-  → `NotifyFollowerChunk` in `docker compose logs queue`, and the notification row
-  appeared in the containerized MySQL for the follower (not the author).
-- Each container runs its own MySQL/Redis data (dev bind-mounted source, prod-baked
-  vendor volume), so the Docker environment is independent of the native one.
-
-What this does **not** prove: production deployment hardening (resource limits,
-secrets management, image scanning, restart-under-load) — this was a single-host
-functional verification.
-
-```bash
-docker compose up -d --build
-curl http://localhost:8080/api/register -H 'Content-Type: application/json' \
-  -d '{"name":"A","email":"a@b.co","password":"password1"}'
-```
-
-## API reference
-
-Base URL: `http://127.0.0.1:8000/api` (native) or `http://localhost:8080/api` (Compose).
-All endpoints require and return JSON. Authenticated endpoints expect
-`Authorization: Bearer <token>`.
-
-| Method & path | Auth | Success | Errors |
+| Method | Endpoint | Success | Errors |
 |---|---|---|---|
-| `POST /register` | — | 201 | 422 validation |
-| `POST /login` | — | 200 | 422 bad credentials, 429 throttled |
-| `GET /user` | token | 200 | 401 |
-| `POST /logout` | token | 204 (revokes current token only) | 401 |
-| `POST /follow/{user_id}` | token | 201 first / 200 duplicate | 401, 404, 422 self-follow |
-| `DELETE /follow/{user_id}` | token | 200 (idempotent) | 401, 404, 422 self |
-| `POST /posts` | token | 201 | 401, 422 |
-| `GET /posts/{id}` | token | 200 | 401, 404 |
-| `DELETE /posts/{id}` | token | 204 (owner only) | 401, 403, 404 |
-| `GET /feed?limit=&cursor=` | token | 200 | 401, 422 bad limit |
-| `POST /posts/{id}/like` | token | 201 first / 200 duplicate | 401, 404 |
-| `DELETE /posts/{id}/like` | token | 200 (idempotent) | 401, 404 |
+| POST | `/register` | 201 | 422, 429 |
+| POST | `/login` | 200 | 422, 429 |
+| GET | `/user` | 200 | 401 |
+| POST | `/logout` | 204 | 401 |
+| POST | `/follow/{user_id}` | 201 (200 if already following) | 404, 422 (self) |
+| DELETE | `/follow/{user_id}` | 200 | 404, 422 (self) |
+| POST | `/posts` | 201 | 422 |
+| GET | `/posts/{id}` | 200 | 404 |
+| DELETE | `/posts/{id}` | 204 | 403 (not owner), 404 |
+| GET | `/feed?limit=20&cursor=` | 200 | 422 |
+| POST | `/posts/{id}/like` | 201 (200 if already liked) | 404 |
+| DELETE | `/posts/{id}/like` | 200 | 404 |
 
-### Examples
+Every authenticated endpoint can also return 401 and 429.
 
 ```bash
-# Register → 201 {"data":{"user":{...},"token":"3|plainToken..."}}
-curl -s -X POST :8000/api/register -H 'Content-Type: application/json' -H 'Accept: application/json' \
-  -d '{"name":"Jane","email":"jane@t.co","password":"sup3r-secret"}'
+# register → {"data": {"user": {...}, "token": "1|..."}}
+curl -X POST localhost:8080/api/register -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  -d '{"name":"Jane","email":"jane@example.com","password":"secret123"}'
 
-# Follow → 201 {"data":{"user_id":2,"following":true}}  (duplicate: 200)
-curl -s -X POST :8000/api/follow/2 -H "Authorization: Bearer $TOKEN" -H 'Accept: application/json'
+curl -X POST localhost:8080/api/follow/2 -H "Authorization: Bearer $TOKEN" -H 'Accept: application/json'
 
-# Create post → 201 (fan-out is queued; the response does not wait for it)
-curl -s -X POST :8000/api/posts -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+curl -X POST localhost:8080/api/posts -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -H 'Accept: application/json' -d '{"content":"hello world"}'
 
-# Feed → 200 (cursor pagination)
-curl -s ":8000/api/feed?limit=2" -H "Authorization: Bearer $TOKEN" -H 'Accept: application/json'
+curl "localhost:8080/api/feed?limit=2" -H "Authorization: Bearer $TOKEN" -H 'Accept: application/json'
 ```
 
-Feed response shape (post detail uses the same item shape without `meta`/`links`):
+Feed response (`GET /posts/{id}` returns a single item of the same shape):
 
 ```json
 {
   "data": [
     {
       "id": 4,
-      "content": "post one",
-      "author": {"id": 2, "name": "Author", "created_at": "2026-10-15T10:42:41+00:00"},
+      "content": "hello world",
+      "author": {"id": 2, "name": "Jane", "created_at": "2026-10-15T10:42:41+00:00"},
       "likes_count": 1,
       "liked_by_me": true,
       "created_at": "2026-10-15T10:42:41+00:00",
       "updated_at": "2026-10-15T10:42:41+00:00"
     }
   ],
-  "links": {"first": null, "last": null, "prev": null, "next": null},
-  "meta": {
-    "path": "http://127.0.0.1:8000/api/feed",
-    "per_page": 2,
-    "next_cursor": "eyJwb3N0cy5jcmVhdGVkX2F0Ijoi...",
-    "prev_cursor": null,
-    "next_page_url": "http://127.0.0.1:8000/api/feed?limit=2&cursor=eyJ...",
-    "prev_page_url": null
-  }
+  "links": {"first": null, "last": null, "prev": null, "next": "http://localhost:8080/api/feed?limit=2&cursor=eyJ..."},
+  "meta": {"path": "http://localhost:8080/api/feed", "per_page": 2, "next_cursor": "eyJ...", "prev_cursor": null}
 }
 ```
 
-Like/unlike return `{"data":{"post_id":4,"likes_count":1,"liked_by_me":true}}`.
-Errors follow Laravel conventions: `401 {"message":"Unauthenticated."}`,
-`422 {"message":..., "errors":{field:[...]}}`, `403`, `404`.
-Author objects never include `email` unless they are the requesting user.
-The `content` field is required, 1–1000 characters (matching the column).
+Like/unlike return `{"data": {"post_id": 4, "likes_count": 1, "liked_by_me": true}}`.
+Errors use Laravel's standard JSON shape (`message`, plus `errors` for 422). Other
+users' emails are never exposed.
 
-## Database schema
+## Architecture
 
-Four domain tables on top of the Laravel/Sanctum defaults (`users`,
-`personal_access_tokens`, cache/jobs tables):
+- **Thin controllers, service layer.** Controllers handle HTTP only; business logic
+  lives in `FeedService`, `PostService`, `LikeService` and `FollowService`.
+  Validation is in Form Requests, authorization in `PostPolicy`, response shaping in
+  API Resources. Eloquent is the data-access layer, so there are no repositories on top
+  of it.
+- **Constraints in the database, not just in code.** Unique keys on follows, likes
+  and notifications plus a `CHECK` against self-follows mean concurrent duplicate
+  requests turn into idempotent no-ops (`insertOrIgnore`) instead of bad data.
+- **No denormalized counters yet.** Like counts are grouped aggregates behind a
+  cache. A `likes_count` column updated by a queued job is the next step once
+  counts become hot.
+- **Auth:** Sanctum personal access tokens. Login failures return the same response
+  for unknown email and wrong password, with equal bcrypt cost on both paths.
 
-**`posts`** — `id`, `user_id → users CASCADE`, `content VARCHAR(1000)`, timestamps.
-Indexes: `(user_id, created_at, id)` (feed join per author; also backs the FK) and
-`(created_at, id)` (the deterministic cursor order).
+## Database & indexes
 
-**`follows`** — `id`, `follower_id`/`followee_id → users CASCADE`, timestamps.
-`UNIQUE (follower_id, followee_id)` (duplicate follows impossible; drives the feed
-join), `INDEX (followee_id, follower_id)` (fan-out enumeration), and
-`CHECK (follower_id <> followee_id)` (self-follow impossible at the storage layer;
-MySQL ≥ 8.0.16 enforces it — verified directly with `ERROR 3819`).
+| Table | Indexes | Used by |
+|---|---|---|
+| `posts` | `(user_id, created_at, id)` | per-author scans in the feed join; backs the FK |
+| | `(created_at, id)` | feed ordering and cursor range scans |
+| `follows` | `UNIQUE (follower_id, followee_id)` | feed join (covering), duplicate prevention |
+| | `(followee_id, follower_id)` | notification fan-out (covering) |
+| | `CHECK (follower_id <> followee_id)` | self-follow prevention |
+| `likes` | `UNIQUE (user_id, post_id)` | duplicate prevention, `liked_by_me` lookup |
+| | `(post_id, user_id)` | per-post counts |
+| `post_notifications` | `UNIQUE (post_id, follower_id)` | idempotent fan-out |
+| | `(follower_id)` | a user's notification inbox |
 
-**`likes`** — `id`, `user_id`/`post_id → CASCADE`, timestamps.
-`UNIQUE (user_id, post_id)` (duplicate likes impossible under any concurrency),
-`INDEX (post_id, user_id)` (per-post counts and batched `liked_by_me` lookups).
-
-**`post_notifications`** — `id`, `post_id`/`follower_id → CASCADE`, timestamps.
-`UNIQUE (post_id, follower_id)` (idempotent fan-out; job retries can never
-double-notify), `INDEX (follower_id)` (inbox reads).
-
-All constraints were verified functionally against MySQL: duplicate follow → `1062`,
-duplicate like → `1062`, orphan post → `1452`, self-follow → `3819`.
-
-## Feed design
-
-The feed query joins `follows` to `posts` and orders deterministically:
+## Feed
 
 ```sql
 SELECT posts.* FROM posts
-INNER JOIN follows ON follows.followee_id = posts.user_id AND follows.follower_id = ?
-WHERE (posts.created_at < ? OR (posts.created_at = ? AND (posts.id < ?)))
+JOIN follows ON follows.followee_id = posts.user_id AND follows.follower_id = :me
+WHERE (posts.created_at, posts.id) < (:cursor_created_at, :cursor_id)   -- omitted on page 1
 ORDER BY posts.created_at DESC, posts.id DESC
-LIMIT 21   -- limit + 1, the extra row drives hasMore
+LIMIT :limit + 1
 ```
 
-- **Determinism:** the composite `(created_at DESC, id DESC)` order makes ties on
-  `created_at` break by `id`; the cursor is exactly that tuple (opaque base64).
-  Pages never overlap or skip, and remain stable under concurrent inserts —
-  verified by tests that walk multi-page feeds with tied timestamps and compare
-  against global order.
-- **N+1 prevention:** every feed page costs a fixed query budget regardless of
-  content — ranking join, one eager author load, one grouped like-count aggregate,
-  one `liked_by_me` existence query. A regression test proves the count is
-  identical for 5 vs 25 distinct authors and ≤ 4.
-- **Measured plans** (local dev MySQL, ~10k posts / 500 follows, no concurrent load;
-  small numbers reflect a warm local server, not production capacity):
-  - First page: backward index scan of `posts_created_id_idx` reading 20 rows +
-    `eq_ref` follow-membership check on `follows_follower_followee_uniq` (covering).
-    **0.26 ms** average over 20 runs.
-  - Deep cursor page (depth ≈ 5000): range scan on the same index — **0.36 ms**.
-  - Equivalent `OFFSET 5000` page: **8.46 ms** — cursor pagination is ~23× faster
-    at that depth and the gap grows with depth.
-- Malformed cursors decode to `null` and are served the first page (lenient,
-  documented, tested).
+- **Cursor pagination, not OFFSET.** The cursor is the `(created_at, id)` of the last
+  row, so every page is an index range scan whose cost doesn't depend on depth. Ties
+  on `created_at` are broken by `id`, so pages never overlap or skip, even while new
+  posts are inserted. Locally, a page at depth 5,000 took 0.36 ms with a cursor vs
+  8.5 ms with `OFFSET`.
+- **No N+1.** A page costs a fixed number of queries no matter how many posts or
+  authors it contains: the feed query, one eager load of authors, one grouped like
+  count (only for cache misses), and one `liked_by_me` lookup. A test asserts the
+  query count is the same for 5 and 25 authors.
+- `limit` defaults to 20, max 50. Invalid or tampered cursors fall back to the first
+  page.
 
 ## Caching
 
-Cache store: Redis (`CACHE_STORE=redis`; the cache connection uses db 1 locally —
-verified with `redis-cli`). The database is always the source of truth.
+Redis, with MySQL always the source of truth.
 
-**Like counts** — key `post:{id}:likes_count`, TTL 600 s (`LIKES_COUNT_CACHE_TTL`).
-Feed pages read counts with one `Cache::many` (a single Redis MGET) plus one grouped
-`COUNT(*)` for misses; misses are written back with one SET per uncached post
-(bounded by page size; Redis pipelining is a future optimization). `liked_by_me` is
-**never cached** — it is user-specific and computed per request via one indexed query.
+**Feed pages:** key `feed:{user}:v{version}:{limit}:{cursor}`, TTL 30 s. Only the
+ordered post IDs and the next/prev cursors are cached. On a hit, posts and authors
+are loaded with `whereIn`, and like data is fetched fresh. So a cached page can't
+leak one user's `liked_by_me` to another, and deleted posts just drop out.
+Follow/unfollow increments the user's `version` (one `INCR`), which invalidates all
+their cached pages without scanning keys. New posts from people you already follow
+appear within the TTL. That's a deliberate tradeoff, to avoid invalidating every
+follower's cache on each post.
 
-*Invalidation is delete-only:* a like/unlike that changes database state deletes the
-key after the statement commits; a duplicate like or no-op unlike touches nothing.
-Counts are never incremented or decremented in Redis, so a cached count can never go
-negative or compound errors. Mutation endpoints always respond with a fresh `COUNT(*)`.
+**Like counts:** key `post:{id}:likes_count`, TTL 600 s. A feed page reads all counts
+with one `MGET` and computes any misses with a single grouped `COUNT`. A like or
+unlike that actually changes state deletes the key; counts are never
+incremented/decremented in Redis, so they can't drift or go negative. Like/unlike
+responses always return a fresh count. `liked_by_me` is per-user and never cached.
 
-*Consistency window (deliberate):* a reader that recomputes a count concurrently with
-a writer's insert can repopulate a stale value after the writer's invalidation; it
-persists until the TTL expires or the next real state change. This window is inherent
-to invalidation-only caching and is demonstrated by a test that injects a stale value
-and shows the documented behavior. Stronger consistency would require write-through
-counters or versioned reads — not worth the complexity for like counts.
+## Queue & notifications
 
-**Feed pages** — key `feed:{user_id}:v{version}:{limit}:{cursor_hash}`, TTL 30 s
-(`FEED_PAGE_CACHE_TTL`). The cached payload is minimal: the ordered post IDs plus the
-exact cursor bookends the original page produced. Cache hits rehydrate models,
-authors, and like metadata with fresh queries, so no user's entry can be served to
-another user and per-user data (`liked_by_me`) is never replayed — covered by an
-isolation test. `HydratedFeedPage` (a `CursorPaginator` subclass) replays the cached
-cursor strings so `meta`/`links` are byte-identical to a fresh page.
+1. `POST /posts` saves the post, dispatches `FanOutPostNotifications($postId)`
+   after the transaction commits, and returns 201 straight away. If the queue is
+   down, the post still saves and the error is logged.
+2. The fan-out job walks the author's followers in chunks of 500 using keyset
+   pagination on `(followee_id, follower_id)`, and dispatches one
+   `NotifyFollowerChunk` per chunk. Memory stays flat no matter how many
+   followers there are.
+3. Each chunk job bulk-inserts notification rows with `insertOrIgnore` against
+   `UNIQUE (post_id, follower_id)`, so retries and duplicate runs never
+   double-notify.
 
-*Invalidation:* follow/unfollow bumps a per-user version key — one O(1) `INCR`
-orphaning all of that user's pages without key scans (tested: a new author appears
-immediately despite the TTL). Posts deleted after caching simply drop out during
-hydration. **New posts from already-followed authors are not invalidated in this
-version** (no fan-out-on-write for cache): the maximum feed staleness is the TTL
-(30 s). This is the documented tradeoff for not running invalidation fan-out on
-every post create.
+Jobs carry only IDs, retry 5 times with backoff (10s → 300s), and skip posts deleted
+in the meantime. Splitting into chunks means one big account's fan-out spreads
+across many workers instead of tying up one job. Jobs that exhaust their retries land
+in `failed_jobs`. A transactional outbox would make delivery fully guaranteed, and
+that's the next step.
 
-## Notifications
+## Rate limiting
 
-Lifecycle: `POST /api/posts` persists the post and returns 201 immediately;
-`FanOutPostNotifications(postId)` is dispatched `->afterCommit()` (after the creating
-transaction commits; a queue outage degrades to "post saved, fan-out lost + logged"
-rather than failing the write — tested with a throwing dispatcher). A worker runs the
-walker, which reads followers and dispatches chunk jobs; chunk jobs insert
-notification rows.
+| Limiter | Applies to | Limit (per minute) | Keyed by |
+|---|---|---|---|
+| `login` | `POST /login` | 5 | email + IP |
+| `register` | `POST /register` | 10 | IP |
+| `api` | all authenticated endpoints | 120 | user |
+| `writes` | follow, post, like (create/delete) | 30 | user |
 
-- **Payloads are scalar**: the walker carries only `postId`; each chunk job carries
-  `postId` + ≤ 500 integer follower IDs.
-- **Chunking:** `WHERE followee_id = ? AND follower_id > :cursor ORDER BY follower_id
-  LIMIT 500` — a covering range scan on `follows_followee_follower_idx` (EXPLAIN
-  verified on 80k follows / 200 followees: covering index, no filesort; 0.28 ms per
-  500-id chunk, local dev DB). Never an OFFSET, never the full follower list in
-  memory.
-- **Idempotency:** chunks write `insertOrIgnore` against `UNIQUE (post_id,
-  follower_id)`; retrying any chunk — or the whole walker — cannot create duplicates
-  (tested by running the full fan-out twice). Deleted posts are detected and skipped
-  with an informational log.
-- **Retries/backoff:** 5 attempts, backoff 10/30/60/120/300 s, timeouts 300 s (walker)
-  and 60 s (chunk).
-- **Guarantees, precisely:** duplicates are impossible; delivery is guaranteed *if*
-  every dispatched job eventually succeeds. A persistent Redis/MySQL outage that
-  exhausts all retries leaves the un-dispatched tail in `failed_jobs` with **no
-  automatic reconciliation** — a transactional outbox plus a periodic `fan-out:resume`
-  command is the recommended future fix.
-- **Follower-selection semantics:** followers are selected *while fan-out runs*, not
-  snapshotted at post-creation time. A user who follows after the post is created but
-  before the walker passes their ID range is notified; a user who unfollows before
-  their chunk is processed is not.
+Writes count against both `api` and `writes`, so a client can't flood posts or likes
+while staying under the general limit.
+
+## Scaling to 5M users / 500k posts per day
+
+500k posts/day is about 6 posts/s on average, and maybe 100–300/s at peak. Writes
+are cheap. The hard part is feed reads and fan-out volume.
+
+**Feed generation.** The current pull model (query followed authors at read time)
+is right while follow lists are moderate, since nothing is precomputed. At scale I'd
+move to a **hybrid push/pull** model:
+
+- *Push* for normal authors: on post creation, the existing chunked fan-out writes
+  the post ID into each follower's timeline, a Redis sorted set
+  `timeline:{user}` scored by timestamp and trimmed to the latest ~800 entries.
+  Reading a feed becomes `ZREVRANGEBYSCORE` + `whereIn` on primary keys.
+- *Pull* for celebrities (e.g. > 10k followers): pushing to millions of
+  timelines per post is too expensive, so their recent posts are fetched at read
+  time and merged into the timeline.
+- Inactive users skip fan-out; their timeline is rebuilt on next login.
+
+**Avoiding slow queries.**
+- Cursor pagination everywhere, never OFFSET.
+- Every hot query is backed by a composite or covering index (table above), and
+  every list is bounded by a hard `LIMIT`.
+- Fixed per-request query budget: eager loading and batched `whereIn`/`GROUP BY`
+  instead of per-row queries.
+- Read replicas for feed/post reads; the primary handles writes.
+- Partition `posts` by month, or shard by `user_id`, once it reaches billions of
+  rows. Archive old notifications.
+- Keep joins narrow: the feed join is index-only on `follows`. With push timelines
+  it disappears entirely.
+
+**When to cache.**
+- Data that is read far more than it changes and can tolerate seconds of
+  staleness: feed pages, like counts, user profiles, timelines.
+- Not for per-viewer flags (`liked_by_me`) or anything that must be exact after a
+  write (mutation responses read from the DB).
+- Invalidate with versioned keys or deletes, never by updating values in place.
+
+**Queues.** Separate queues for fan-out and other jobs so a celebrity post can't
+delay everything else. Workers scale horizontally (Horizon), and queue depth and
+failure rate are the alerting signals.
 
 ## Testing
 
-`vendor/bin/pest` → **80 tests, 293 assertions, all passing** (MySQL `pulsefeed_testing`
-database, array cache, `database` queue connection). Coverage includes auth and
-throttling, follow integrity and self-follow rejection, post CRUD and policy,
-feed ordering/ties/pagination-walks/isolation, N+1 regression guards, like
-idempotency and cache behavior, feed-cache isolation and invalidation, and the full
-notification matrix (dispatch-after-commit observed through the real database queue
-driver, chunk partitioning, retry dedup, deleted posts, crash recovery).
+90 Pest feature tests (339 assertions) cover:
+- auth and rate limits
+- follow rules and constraints
+- post CRUD and authorization
+- feed ordering, tie-breaking, multi-page walks and isolation
+- N+1 query-count guards
+- like idempotency and cache behaviour
+- feed-cache isolation and invalidation
+- the notification pipeline: after-commit dispatch, chunking, retry dedup, deleted
+  posts, queue outage
 
-Four levels of verification were used, and they are not interchangeable:
-
-1. **Automated Pest suite** — logic and contracts, on MySQL + array cache +
-   database queue. `Queue::fake()` proves dispatch wiring but *cannot* demonstrate
-   after-commit deferral (the fake records pushes immediately); that property is
-   tested against the real database queue driver instead.
-2. **Live HTTP smoke tests** — every endpoint exercised with real tokens via
-   `php artisan serve` + `curl` during development (status codes and bodies
-   spot-checked in each phase).
-3. **Real Redis checks** — like-count keys (`post:{id}:likes_count`, TTL 600),
-   feed page keys (`feed:{id}:v{n}:20:first`, TTL 30), MGET batching, invalidation
-   on unlike, and an actual `queue:work redis` run processing walker + chunk to
-   produce notification rows.
-4. **Docker Compose** — built and run on the development machine (Docker Engine
-   29.5.2): full request path through nginx + php-fpm, plus the queue worker
-   processing the fan-out inside containers. Not a production-hardening test.
+Tests run against MySQL (not SQLite), so the real constraints and query plans are
+exercised. The test bootstrap refuses to run against any database other than
+`pulsefeed_testing`.
 
 ## Benchmark data
 
-A dedicated command bulk-seeds a parameterized dataset for load testing
-(batched raw SQL over recursive CTEs — never Eloquent factories; deterministic
-multiplicative hashing instead of `RAND()`, which collapses inside
-`INSERT ... SELECT` over recursive CTEs on MySQL):
-
 ```bash
-# Defaults: 100k users, 1M posts, ~1M follows, 2M likes, 10 "celebrities"
-php artisan pulsefeed:seed-benchmark --fresh
-
-# Custom shape (additive without --fresh)
-php artisan pulsefeed:seed-benchmark --users=250000 --posts=3000000 --likes=5000000 --chunk=20000
+php artisan pulsefeed:seed-benchmark --fresh   # 100k users, 1M posts, ~1M follows, 2M likes
 ```
 
-It also creates three fixed login accounts — `bench-sub-500@bench.local`,
-`bench-sub-5000@bench.local`, `bench-sub-50000@bench.local` (password
-`sup3r-secret`) — following 500 / 5,000 / 50,000 authors respectively, so the
-feed endpoint itself can be benchmarked at controlled follow-graph sizes.
-**Verified locally** (Homebrew MySQL, single connection, no concurrent load —
-indicative, not capacity proof):
+The command seeds with batched `INSERT … SELECT` over recursive CTEs (about 70 s
+locally for the defaults). It also creates `bench-sub-500@bench.local`,
+`bench-sub-5000@bench.local` and `bench-sub-50000@bench.local` (password
+`sup3r-secret`), which follow 500 / 5k / 50k authors.
 
-- Full default seed: **100,003 users / 1,000,000 posts / 1,019,307 follows /
-  2,000,000 likes in ~70 s** (users 1.1 s, posts 8.5 s, follows 7.5 s,
-  likes 50.8 s).
-- Feed over HTTP as `bench-sub-50000` (50k followed authors, 1M posts):
-  cold first page **44 ms**, cached repeat **15 ms**, cursor page 2 **30 ms**
-  — all fully hydrated (author, `likes_count`, `liked_by_me`).
-- Deep cursor page at depth **500,000** for the same subscriber:
-  **4.8 ms** average over 10 runs. EXPLAIN at that depth shows the optimizer
-  switching from the global `(created_at, id)` index scan to a
-  follows-driven merge with a filesort across the 50k followed authors —
-  still single-digit milliseconds here, and exactly the celebrity-scale cost
-  growth described in the scaling section below.
-
-## Architecture decisions and tradeoffs
-
-- **Modular monolith**, thin controllers, services only where logic earns them
-  (`Follow`, `Feed`, `Like`, `Post`), Form Requests for validation, one Policy
-  (post deletion), API Resources for responses. No repositories, no event-sourcing.
-- **Denormalized nothing.** Like counts are computed (grouped aggregates), keeping
-  correctness trivial; a counter column is the documented next step if counts ever
-  become hot.
-- **Constraints over code:** uniqueness, self-follow prevention, and referential
-  integrity all live in the schema; application code races degrade into idempotent
-  no-ops instead of corruption.
-
-### Scaling to 5M users / 500k posts per day
-
-500,000 posts/day averages **≈ 5.8 posts/second**; realistic peaks (timezones,
-viral content) can multiply that by 10–50×. The reasoning below explains design
-choices — it does **not** constitute proof of capacity.
-
-**Why pull-based is a reasonable start.** With cursor pagination and the composite
-indexes, one feed page is an index-ordered scan with a bounded per-page cost that
-does not grow with offset depth (measured locally: sub-millisecond at depth 5000 on
-a 10k-post dataset — indicative of plan shape, not capacity). For mostly-smaller
-follow graphs, pull avoids the write amplification of maintaining per-follower
-timelines for every post.
-
-**Why celebrities break pure pull.** A pull feed for a user following a 5M-follower
-account must scan that account's stream within the candidate time window and
-intersect it with follow membership; the cost grows with the product of followed
-volume and fan density, and merges across many followed high-volume accounts get
-expensive.
-
-**The documented hybrid strategy (future, not implemented):** classify accounts by
-follower count (e.g., > 10–50k = "celebrity"). Feed assembly merges (a) pushed,
-pre-materialized timeline entries for normal authors — written at post-create time
-by the existing chunked fan-out worker — with (b) on-the-fly pulls for celebrity
-authors, plus (c) the per-user page cache that already exists. Today's pieces map
-onto that path deliberately: chunked idempotent jobs, per-user feed versioning, and
-cursor-stable caching. Introducing it needs capacity measurements first.
-
-**What Redis and queues buy at this scale:** the queue absorbs the fan-out write
-burst (500k posts/day × average followers is the real write volume; the walker
-already batches it into 500-follower chunks); Redis absorbs hot reads (counts,
-pages) and defers ranking work. Backlog depth (`queues:default` length), job
-throughput, and retry counts are the signals to alert on.
-
-**What the local measurements do not prove.** Everything measured here ran on a
-single developer machine (Homebrew MySQL/Redis, warm caches, single connection, no
-concurrent load) against ≤ 80k rows. The measurements demonstrate plan shape and
-constant-per-page behavior — not throughput, not behavior under production
-contention, not multi-node topology.
-
-**Before claiming production readiness:** load tests at target RPS (k6/Locust:
-feed reads, like storms, post-create bursts with realistic follow graphs),
-concurrency tests for constraint races, rate limiting on the write endpoints
-(only login is throttled today), MySQL sizing and replication review, Redis
-memory/topology planning, queue backlog and failure monitoring, a reconciliation
-mechanism for exhausted fan-out, and capacity planning tied to measured percentiles
-rather than averages.
+Measured on a laptop as `bench-sub-50000` with 1M posts: first feed page 44 ms cold,
+15 ms cached, and a cursor page at depth 500,000 in under 5 ms. These are
+single-machine numbers that show query-plan behaviour, not production capacity.
