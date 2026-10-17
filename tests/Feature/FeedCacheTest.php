@@ -98,7 +98,7 @@ it('invalidates all cached feed pages when the follow graph changes', function (
         ->postJson("/api/follow/{$newAuthor->id}")
         ->assertCreated();
 
-    expect(Cache::has($beforeKey))->toBeTrue() // lingers until its TTL
+    expect(Cache::has($beforeKey))->toBeTrue()
         ->and(feedKey($subscriber))->not->toBe($beforeKey);
 
     $this->actingAs($subscriber, 'sanctum')
@@ -112,7 +112,6 @@ it('bounds feed staleness to the TTL for new posts by followed authors', functio
 
     $this->actingAs($subscriber, 'sanctum')->getJson('/api/feed')->assertOk();
 
-    // No invalidation for new posts by followed authors: TTL-bounded.
     $post = Post::factory()->for($author, 'author')->make(['content' => 'brand new']);
     $post->created_at = Carbon::parse('2026-03-01 00:00:00');
     $post->save();
@@ -135,7 +134,6 @@ it('normalizes malformed cursors and default limits into one cache key', functio
 
     $this->actingAs($subscriber, 'sanctum')->getJson('/api/feed?limit=20')->assertOk();
 
-    // Omitted limit and a garbage cursor resolve to the first-page key.
     expect(feedKey($subscriber, 20, null))
         ->toBe(feedKey($subscriber, 20, 'not-a-valid-cursor'))
         ->toBe(feedKey($subscriber));

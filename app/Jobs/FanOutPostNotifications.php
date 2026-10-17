@@ -11,12 +11,6 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
-/**
- * Dispatches one NotifyFollowerChunk per bounded chunk of the author's
- * followers. Followers are selected while the fan-out runs, not at post
- * creation; a retried walker re-walks from the first chunk and the chunk
- * jobs deduplicate through the (post_id, follower_id) unique constraint.
- */
 class FanOutPostNotifications implements ShouldQueue
 {
     use Dispatchable;
@@ -35,9 +29,7 @@ class FanOutPostNotifications implements ShouldQueue
 
     public function __construct(
         public readonly int $postId,
-    ) {
-        //
-    }
+    ) {}
 
     public function handle(): void
     {
@@ -54,8 +46,6 @@ class FanOutPostNotifications implements ShouldQueue
         $cursor = 0;
 
         do {
-            // Covering range read on (followee_id, follower_id); at most
-            // CHUNK_SIZE ids in memory.
             $followerIds = Follow::query()
                 ->where('followee_id', $post->user_id)
                 ->where('follower_id', '>', $cursor)

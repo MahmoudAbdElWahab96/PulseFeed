@@ -16,11 +16,6 @@ class FeedService
 
     public const MAX_LIMIT = 50;
 
-    /**
-     * The cached payload is the ordered post IDs plus the cursor bookends;
-     * hits rehydrate models, authors, and like metadata fresh, so entries
-     * are per-user and user-specific data is never replayed.
-     */
     public function paginate(User $subscriber, int $limit, ?string $cursor): CursorPaginator
     {
         $cursor = $this->normalizeCursor($cursor);
@@ -48,10 +43,6 @@ class FeedService
         return $page;
     }
 
-    /**
-     * The version component lets a follow/unfollow invalidate every cached
-     * page for a user with one increment instead of key scans.
-     */
     public function pageCacheKey(User $subscriber, int $limit, ?string $cursor): string
     {
         $version = (int) Cache::get(self::versionKey($subscriber->id), 0);
@@ -74,11 +65,22 @@ class FeedService
 
     private function normalizeCursor(?string $cursor): ?string
     {
-        if ($cursor === null || Cursor::fromEncoded($cursor) === null) {
+        $decoded = $cursor === null ? null : Cursor::fromEncoded($cursor);
+
+        if ($decoded === null) {
             return null;
         }
 
-        return $cursor;
+        $parameters = $decoded->toArray();
+        $createdAt = $parameters['posts.created_at'] ?? null;
+        $id = $parameters['posts.id'] ?? null;
+
+        $valid = is_string($createdAt)
+            && strtotime($createdAt) !== false
+            && (is_int($id) || (is_string($id) && ctype_digit($id)))
+            && is_bool($parameters['_pointsToNextItems']);
+
+        return $valid ? $cursor : null;
     }
 
     /**
@@ -92,7 +94,6 @@ class FeedService
             ->get()
             ->keyBy('id');
 
-        // Cached order wins; posts deleted since caching drop out.
         $items = (new Collection($cached['ids']))
             ->filter(fn (int $id) => $posts->has($id))
             ->map(fn (int $id) => $posts[$id])
@@ -112,6 +113,6 @@ class FeedService
             ->with('author')
             ->orderByDesc('posts.created_at')
             ->orderByDesc('posts.id')
-            ->cursorPaginate(perPage: $limit, cursor: $cursor);
+            ->cursorPaginate(perPage: $limit, cursor: $cursor ?? '');
     }
 }

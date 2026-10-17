@@ -21,8 +21,6 @@ class User extends Authenticatable
     use HasApiTokens, HasFactory, Notifiable;
 
     /**
-     * Get the attributes that should be cast.
-     *
      * @return array<string, string>
      */
     protected function casts(): array
@@ -43,18 +41,12 @@ class User extends Authenticatable
         return $this->hasMany(Like::class);
     }
 
-    /**
-     * Users this user follows (follows.follower_id = this user).
-     */
     public function following(): BelongsToMany
     {
         return $this->belongsToMany(self::class, 'follows', 'follower_id', 'followee_id')
             ->withTimestamps();
     }
 
-    /**
-     * Users following this user (follows.followee_id = this user).
-     */
     public function followers(): BelongsToMany
     {
         return $this->belongsToMany(self::class, 'follows', 'followee_id', 'follower_id')

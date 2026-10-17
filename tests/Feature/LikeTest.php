@@ -173,7 +173,6 @@ it('caches like counts and invalidates on real state changes only', function () 
         ->assertJsonPath('data.likes_count', 1);
     expect((int) Cache::get($key))->toBe(1);
 
-    // A no-op unlike leaves a deliberately stale value untouched.
     Cache::put($key, 999, 60);
     $this->actingAs($liker, 'sanctum')
         ->deleteJson("/api/posts/{$post->id}/like")
@@ -188,7 +187,6 @@ it('caches like counts and invalidates on real state changes only', function () 
         ->assertJsonPath('data.likes_count', 0);
     expect((int) Cache::get($key))->toBe(999);
 
-    // Reads never revalidate; the documented window is TTL-bounded.
     $this->actingAs($author, 'sanctum')
         ->getJson("/api/posts/{$post->id}")
         ->assertJsonPath('data.likes_count', 999);

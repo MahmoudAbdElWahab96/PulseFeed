@@ -16,7 +16,6 @@ class PostFactory extends Factory
      */
     public function definition(): array
     {
-        // Faker's realText() exhausts memory across a full suite; words() does not.
         return [
             'user_id' => User::factory(),
             'content' => str(fake()->words(rand(8, 40), true))->title()->toString(),

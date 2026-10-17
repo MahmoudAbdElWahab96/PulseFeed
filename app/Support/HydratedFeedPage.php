@@ -6,11 +6,6 @@ use Illuminate\Pagination\Cursor;
 use Illuminate\Pagination\CursorPaginator;
 use Illuminate\Pagination\Paginator;
 
-/**
- * A feed page replayed from cache. The cursor accessors return the exact
- * strings the original page produced, so meta and page URLs stay identical
- * to a freshly computed page.
- */
 class HydratedFeedPage extends CursorPaginator
 {
     public function __construct(

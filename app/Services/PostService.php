@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Jobs\FanOutPostNotifications;
 use App\Models\Post;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -17,8 +18,6 @@ class PostService
         try {
             FanOutPostNotifications::dispatch($post->id)->afterCommit();
         } catch (Throwable $e) {
-            // The post is durable; a queue outage degrades to lost fan-out
-            // (logged), never a failed write.
             Log::error('Post notification fan-out could not be queued.', [
                 'post_id' => $post->id,
                 'error_class' => $e::class,
@@ -27,5 +26,12 @@ class PostService
         }
 
         return $post;
+    }
+
+    public function delete(Post $post): void
+    {
+        $post->delete();
+
+        Cache::forget(LikeService::countCacheKey($post->id));
     }
 }

@@ -14,10 +14,8 @@ return new class extends Migration
             $table->string('content', 1000);
             $table->timestamps();
 
-            // Feed join per author; also backs the user_id foreign key.
             $table->index(['user_id', 'created_at', 'id'], 'posts_user_created_id_idx');
 
-            // Deterministic (created_at DESC, id DESC) cursor order.
             $table->index(['created_at', 'id'], 'posts_created_id_idx');
         });
     }

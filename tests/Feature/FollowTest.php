@@ -73,7 +73,6 @@ it('unfollows a user and stays idempotent when nothing is followed', function ()
 
     expect(Follow::query()->where('follower_id', $follower->id)->count())->toBe(0);
 
-    // Unfollowing again is not an error.
     $this->actingAs($follower, 'sanctum')
         ->deleteJson("/api/follow/{$target->id}")
         ->assertOk()
@@ -85,8 +84,6 @@ it('always operates on the authenticated user as the follower', function () {
     $victim = User::factory()->create();
     $target = User::factory()->create();
 
-    // A forged follower_id in the body must be ignored; the relationship is
-    // created from the authenticated user only.
     $this->actingAs($attacker, 'sanctum')
         ->postJson("/api/follow/{$target->id}", ['follower_id' => $victim->id])
         ->assertCreated();

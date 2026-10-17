@@ -12,9 +12,7 @@ class LikeController extends Controller
 {
     public function __construct(
         private readonly LikeService $likes,
-    ) {
-        //
-    }
+    ) {}
 
     public function store(Request $request, Post $post): JsonResponse
     {

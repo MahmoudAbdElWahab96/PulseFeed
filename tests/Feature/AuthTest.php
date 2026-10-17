@@ -23,7 +23,6 @@ it('registers a user and issues a token', function () {
 
     $user = User::query()->where('email', 'jane@example.com')->firstOrFail();
 
-    // Password must be stored hashed, never echoed in the response.
     expect($user->password)->not->toBe('sup3r-secret')
         ->and($response->json('data.user.password'))->toBeNull();
 });
@@ -83,8 +82,6 @@ it('returns indistinguishable errors for wrong password and unknown email', func
         'password' => 'sup3r-secret',
     ])->assertUnprocessable();
 
-    // Identical status, message, and error body: no way to tell whether the
-    // email exists.
     expect($wrongPassword->getContent())->toBe($unknownEmail->getContent())
         ->and($wrongPassword->json('errors.email'))->toBe(['These credentials do not match our records.']);
 });
@@ -104,7 +101,6 @@ it('throttles repeated login failures', function () {
         'password' => 'wrong-password',
     ])->assertTooManyRequests();
 
-    // The limit is keyed per email, not global.
     $this->postJson('/api/login', [
         'email' => 'other@example.com',
         'password' => 'wrong-password',
@@ -137,19 +133,14 @@ it('logs out by revoking only the current token', function () {
 
     expect($user->tokens()->count())->toBe(1);
 
-    // Test requests share one process, so the auth manager's cached guards
-    // would keep serving the previously resolved user; drop them to make the
-    // next request resolve the (now revoked) token from scratch.
     auth()->forgetGuards();
 
-    // Revoked token no longer authenticates...
     $this->withHeader('Authorization', "Bearer {$tokenA}")
         ->getJson('/api/user')
         ->assertUnauthorized();
 
     auth()->forgetGuards();
 
-    // ...but the user's other token is untouched.
     $this->withHeader('Authorization', "Bearer {$tokenB}")
         ->getJson('/api/user')
         ->assertOk();

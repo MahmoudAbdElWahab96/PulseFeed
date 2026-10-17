@@ -14,10 +14,8 @@ return new class extends Migration
             $table->foreignId('post_id')->constrained('posts')->cascadeOnDelete();
             $table->timestamps();
 
-            // Duplicate likes are impossible, under any concurrency.
             $table->unique(['user_id', 'post_id'], 'likes_user_post_uniq');
 
-            // Per-post counts and batched liked_by_me lookups.
             $table->index(['post_id', 'user_id'], 'likes_post_user_idx');
         });
     }

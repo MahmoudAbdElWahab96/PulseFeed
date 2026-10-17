@@ -11,10 +11,6 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
-/**
- * insertOrIgnore against UNIQUE (post_id, follower_id): retries and
- * duplicate dispatches cannot create a second notification.
- */
 class NotifyFollowerChunk implements ShouldQueue
 {
     use Dispatchable;

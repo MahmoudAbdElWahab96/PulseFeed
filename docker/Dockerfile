@@ -6,19 +6,23 @@ RUN chmod +x /usr/local/bin/install-php-extensions \
 
 FROM base AS vendor
 
+ARG INSTALL_DEV=false
+
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 WORKDIR /var/www
 COPY composer.json composer.lock ./
-RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --no-interaction
+RUN composer install $([ "$INSTALL_DEV" = "true" ] || echo --no-dev) --no-scripts --no-autoloader --prefer-dist --no-interaction
 
 FROM base
+
+ARG INSTALL_DEV=false
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 WORKDIR /var/www
 
 COPY --from=vendor /var/www/vendor /var/www/vendor
 COPY . .
-RUN composer dump-autoload -o --no-dev --no-interaction \
+RUN composer dump-autoload -o $([ "$INSTALL_DEV" = "true" ] || echo --no-dev) --no-interaction \
     && chown -R www-data:www-data storage bootstrap/cache \
     && chmod +x docker/entrypoint.sh
 

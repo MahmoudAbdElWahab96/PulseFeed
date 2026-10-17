@@ -3,6 +3,10 @@ set -e
 
 cd /var/www
 
+if [ ! -f .env ]; then
+    cp .env.example .env
+fi
+
 if [ "${REBUILD_AUTOLOADER:-0}" = "1" ]; then
     composer dump-autoload --no-interaction
 fi

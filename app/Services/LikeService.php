@@ -56,20 +56,7 @@ class LikeService
         return Like::query()->where('post_id', $post->id)->count();
     }
 
-    public function countFor(Post $post): int
-    {
-        return (int) Cache::remember(
-            self::countCacheKey($post->id),
-            config('pulsefeed.likes.count_cache_ttl'),
-            fn () => $this->freshCount($post),
-        );
-    }
-
     /**
-     * Counts are only ever invalidated, never adjusted in cache, so they
-     * cannot drift or go negative; a duplicate like or no-op unlike is a
-     * no-state-change and touches nothing.
-     *
      * @param  Collection<int, Post>  $posts
      */
     public function hydrate(Collection $posts, ?User $viewer): void
@@ -95,9 +82,6 @@ class LikeService
     }
 
     /**
-     * One Cache::many (a single MGET) plus one grouped COUNT for the
-     * misses; never a query or cache call per post.
-     *
      * @param  array<int, int>  $postIds
      * @return array<int, int>
      */

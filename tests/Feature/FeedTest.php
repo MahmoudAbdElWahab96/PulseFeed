@@ -122,7 +122,6 @@ it('paginates without duplicates or gaps across cursors, including ties', functi
     $authors = User::factory()->count(3)->create();
     $subscriber->following()->attach($authors);
 
-    // Several posts share a timestamp to exercise the compound cursor.
     foreach (range(1, 25) as $i) {
         createPostAt($authors[$i % 3], '2026-01-01 '.sprintf('%02d', intdiv($i, 2)).':00:00', "post {$i}");
     }
@@ -195,6 +194,43 @@ it('treats a malformed cursor as the first page', function () {
         ->assertJsonCount(1, 'data');
 });
 
+it('treats a decodable cursor with foreign or invalid parameters as the first page', function (array $payload) {
+    $subscriber = User::factory()->create();
+    $author = User::factory()->create();
+    $subscriber->following()->attach($author);
+    createPostAt($author, '2026-01-01 10:00:00', 'only post');
+
+    $cursor = rtrim(strtr(base64_encode(json_encode($payload)), '+/', '-_'), '=');
+
+    $this->actingAs($subscriber, 'sanctum')
+        ->getJson('/api/feed?cursor='.$cursor)
+        ->assertOk()
+        ->assertJsonCount(1, 'data');
+})->with([
+    'missing parameters' => [['foo' => 1, '_pointsToNextItems' => true]],
+    'non-date created_at' => [['posts.created_at' => ['x'], 'posts.id' => 1, '_pointsToNextItems' => true]],
+    'non-integer id' => [['posts.created_at' => '2026-01-01 10:00:00', 'posts.id' => 'abc', '_pointsToNextItems' => true]],
+]);
+
+it('keeps the requested limit in pagination links, fresh and cached', function () {
+    $subscriber = User::factory()->create();
+    $author = User::factory()->create();
+    $subscriber->following()->attach($author);
+
+    foreach (range(1, 3) as $i) {
+        createPostAt($author, "2026-01-01 10:0{$i}:00", "post {$i}");
+    }
+
+    foreach (['fresh', 'cached'] as $pass) {
+        $next = $this->actingAs($subscriber, 'sanctum')
+            ->getJson('/api/feed?limit=1')
+            ->assertOk()
+            ->json('links.next');
+
+        expect($next)->toContain('limit=1')->toContain('cursor=');
+    }
+});
+
 it('issues a fixed number of queries regardless of page contents (no N+1)', function () {
     $subscriber = User::factory()->create();
     $authors = User::factory()->count(5)->create();
@@ -204,7 +240,6 @@ it('issues a fixed number of queries regardless of page contents (no N+1)', func
     }
 
     $countQueries = function () use ($subscriber) {
-        // Both measurements must take the uncached path.
         Cache::flush();
 
         DB::flushQueryLog();
@@ -219,8 +254,6 @@ it('issues a fixed number of queries regardless of page contents (no N+1)', func
 
     $withFiveAuthors = $countQueries();
 
-    // If author resolution or like metadata were per-post, the query
-    // count would grow with the page.
     $moreAuthors = User::factory()->count(20)->create();
     $subscriber->following()->attach($moreAuthors);
     foreach ($moreAuthors as $author) {

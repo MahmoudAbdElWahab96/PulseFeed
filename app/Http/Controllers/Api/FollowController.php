@@ -11,9 +11,7 @@ class FollowController extends Controller
 {
     public function __construct(
         private readonly FollowService $follows,
-    ) {
-        //
-    }
+    ) {}
 
     public function store(Request $request, string $userId): JsonResponse
     {

@@ -12,9 +12,6 @@ use Illuminate\Http\Resources\Json\JsonResource;
 class PostResource extends JsonResource
 {
     /**
-     * likes_count and liked_by_me are attached by LikeService::hydrate()
-     * in batched queries before the resource is built.
-     *
      * @return array<string, mixed>
      */
     public function toArray(Request $request): array

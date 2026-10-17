@@ -14,7 +14,6 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
-    /** Checked when the email is unknown, so both failure paths pay the same bcrypt cost. */
     private const DUMMY_HASH = '$2y$12$PTPwi1xWzwg4jvARnJV9D.QgLPZPOeKs3c.p51yCbmreIDBAdSyhC';
 
     public function register(RegisterRequest $request): JsonResponse

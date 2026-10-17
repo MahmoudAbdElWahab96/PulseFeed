@@ -14,7 +14,6 @@ return new class extends Migration
             $table->foreignId('follower_id')->constrained('users')->cascadeOnDelete();
             $table->timestamps();
 
-            // Fan-out writes use insertOrIgnore: job retries cannot duplicate.
             $table->unique(['post_id', 'follower_id'], 'post_notifications_post_follower_uniq');
 
             $table->index('follower_id', 'post_notifications_follower_idx');

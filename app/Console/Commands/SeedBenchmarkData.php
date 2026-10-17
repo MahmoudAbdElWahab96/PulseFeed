@@ -11,19 +11,6 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 
-/**
- * Bulk-seeds a benchmark dataset with batched raw SQL over recursive CTEs;
- * Eloquent factories would take hours at these volumes.
- *
- * Random-looking values come from deterministic multiplicative hashing of
- * (row, batch) numbers, not SQL RAND(): inside INSERT ... SELECT over a
- * recursive CTE, RAND()-based pairs collapse to a fraction of their
- * expected distinct count (observed 61% per batch locally). Ids are
- * explicit and gap-free because AUTO_INCREMENT burns values on failed
- * statements, and downstream hashing relies on contiguous ranges.
- *
- * Additive by default; --fresh truncates first.
- */
 #[Signature('pulsefeed:seed-benchmark
     {--users=100000 : Number of regular users to seed}
     {--posts=1000000 : Total posts to seed, spread across users}
@@ -39,7 +26,6 @@ class SeedBenchmarkData extends Command
 {
     private const PASSWORD = 'sup3r-secret';
 
-    /** Email => number of authors followed. */
     private const BENCH_SUBSCRIBERS = [
         'bench-sub-500@bench.local' => 500,
         'bench-sub-5000@bench.local' => 5000,
@@ -152,8 +138,6 @@ class SeedBenchmarkData extends Command
 
         $stage = now();
 
-        // The first C seeded users take 60% of the budget for a
-        // heavy-tailed follower distribution; the rest is spread randomly.
         $celebrityBudget = (int) floor($budget * 0.6);
         $randomBudget = $budget - $celebrityBudget;
         $perCelebrity = max(1, intdiv($celebrityBudget, $celebrities));
@@ -165,7 +149,6 @@ class SeedBenchmarkData extends Command
                 $n = min($chunk, $perCelebrity - $seeded);
                 $batch++;
 
-                // Followers drawn from non-celebrity ids only: no self-follow possible.
                 DB::statement(<<<SQL
                     INSERT IGNORE INTO follows (follower_id, followee_id, created_at, updated_at)
                     WITH RECURSIVE nums AS (
@@ -187,8 +170,6 @@ class SeedBenchmarkData extends Command
             $n = min($chunk, $randomBudget - $seeded);
             $batch++;
 
-            // The pair is built once in the inner SELECT so the WHERE
-            // filters the values actually being inserted.
             DB::statement(<<<SQL
                 INSERT IGNORE INTO follows (follower_id, followee_id, created_at, updated_at)
                 WITH RECURSIVE nums AS (

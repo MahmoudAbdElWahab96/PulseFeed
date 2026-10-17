@@ -11,7 +11,6 @@ use Illuminate\Http\Resources\Json\JsonResource;
  */
 class UserResource extends JsonResource
 {
-    /** Set by register/login, where no authenticated user exists to compare against. */
     public bool $own = false;
 
     public function markAsOwn(): static
@@ -22,8 +21,6 @@ class UserResource extends JsonResource
     }
 
     /**
-     * Email is only exposed for the requesting user themselves.
-     *
      * @return array<string, mixed>
      */
     public function toArray(Request $request): array
