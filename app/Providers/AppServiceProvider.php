@@ -10,10 +10,7 @@ use Illuminate\Support\Str;
 
 class AppServiceProvider extends ServiceProvider
 {
-    public function register(): void
-    {
-        //
-    }
+    public function register(): void {}
 
     public function boot(): void
     {
@@ -22,5 +19,17 @@ class AppServiceProvider extends ServiceProvider
 
             return Limit::perMinute(5)->by($email.'|'.$request->ip());
         });
+
+        RateLimiter::for('register', fn (Request $request) => Limit::perMinute(
+            config('pulsefeed.rate_limits.register_per_minute')
+        )->by($request->ip()));
+
+        RateLimiter::for('api', fn (Request $request) => Limit::perMinute(
+            config('pulsefeed.rate_limits.reads_per_minute')
+        )->by($request->user()?->id ?: $request->ip()));
+
+        RateLimiter::for('writes', fn (Request $request) => Limit::perMinute(
+            config('pulsefeed.rate_limits.writes_per_minute')
+        )->by($request->user()?->id ?: $request->ip()));
     }
 }
